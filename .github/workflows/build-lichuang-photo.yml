@@ -1,0 +1,55 @@
+name: 编译立创实战派拍照版固件
+
+# 这个工作流会自动去官方仓库拉取 v2.6.0 源码，
+# 再用你上传的 esp32_camera.cc 覆盖摄像头驱动，然后编译出固件。
+# 所以你只需要上传 2 个小文件，不用上传整套源码（1800 多个文件）。
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main, master]
+
+permissions:
+  contents: read
+
+jobs:
+  build-lichuang:
+    name: 编译 lichuang-dev（含拍照传电脑）
+    runs-on: ubuntu-latest
+    container:
+      image: espressif/idf:release-v6.1
+    steps:
+      # 1. 获取你上传的改造文件（esp32_camera.cc 就在仓库根目录）
+      - name: 获取你上传的改造文件
+        uses: actions/checkout@v4
+
+      # 2. 自动下载官方小智 v2.6.0 源码（在云端完成，很快）
+      - name: 下载官方小智源码 v2.6.0
+        uses: actions/checkout@v4
+        with:
+          repository: 78/xiaozhi-esp32
+          ref: v2.6.0
+          path: xiaozhi
+          fetch-depth: 0
+
+      # 3. 用改好的文件覆盖官方摄像头驱动
+      - name: 应用拍照传电脑改造
+        run: |
+          cp esp32_camera.cc xiaozhi/main/boards/common/esp32_camera.cc
+          echo "已覆盖摄像头驱动文件"
+
+      # 4. 编译（只编译你这一块板，几分钟）
+      - name: 编译固件
+        shell: bash
+        working-directory: xiaozhi
+        run: |
+          source "$IDF_PATH/export.sh"
+          python scripts/build.py lichuang-dev --name lichuang-dev
+
+      # 5. 把编译好的固件存起来供下载
+      - name: 上传固件
+        uses: actions/upload-artifact@v4
+        with:
+          name: 立创实战派-拍照传电脑版
+          path: xiaozhi/build/merged-binary.bin
+          if-no-files-found: error
