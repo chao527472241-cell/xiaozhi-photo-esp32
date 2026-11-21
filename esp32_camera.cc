@@ -24,14 +24,16 @@
 static void pc_photo_dump_jpeg(const uint8_t* data, size_t len) {
     if (data == nullptr || len == 0) return;
 
-    size_t b64_len = 0;
-    if (mbedtls_base64_encode(nullptr, 0, &b64_len, data, len) != 0) return;
+    // base64 输出长度 = 4 * ceil(len/3)，另加结尾 null。
+    // 直接按上限分配，不用探测调用（探测调用会返回 BUFFER_TOO_SMALL，
+    // 早期版本误把它当失败，导致整段发图逻辑从未执行）。
+    size_t b64_len = ((len + 2) / 3) * 4 + 4;
 
-    unsigned char* b64 = (unsigned char*)heap_caps_malloc(b64_len + 1, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    unsigned char* b64 = (unsigned char*)heap_caps_malloc(b64_len, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     if (b64 == nullptr) return;
 
     size_t written = 0;
-    if (mbedtls_base64_encode(b64, b64_len + 1, &written, data, len) == 0) {
+    if (mbedtls_base64_encode(b64, b64_len, &written, data, len) == 0) {
         // 帧开始标记（带长度，方便电脑端校验）
         printf("\n===PC_Photo_BEGIN:%u===\n", (unsigned)written);
         // 分 96 字节一段输出，远低于典型日志缓冲区，防止串口输出被截断
