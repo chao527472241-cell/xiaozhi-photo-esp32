@@ -56,6 +56,6 @@ jobs:
       - name: 上传固件
         uses: actions/upload-artifact@v4
         with:
-          name: 立创实战派-拍照传电脑版-嗨小欧-静默转发
+          name: 立创实战派-拍照传电脑版-嗨小欧-全静默
           path: xiaozhi/build/merged-binary.bin
           if-no-files-found: error
