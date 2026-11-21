@@ -32,19 +32,12 @@ jobs:
           path: xiaozhi
           fetch-depth: 0
 
-      # 3. 用改好的文件覆盖官方摄像头驱动 + 给 build.py 注入自定义唤醒词
+      # 3. 用改好的文件覆盖官方摄像头驱动（拍照传电脑改造）
       - name: 应用拍照传电脑改造
         shell: bash
         run: |
           cp esp32_camera.cc xiaozhi/main/boards/common/esp32_camera.cc
           echo "已覆盖摄像头驱动文件"
-          # 读取唤醒词配置（第一行拼音，第二行显示文字，第三行阈值）
-          PINYIN=$(sed -n '1p' wakeword.txt)
-          DISPLAY=$(sed -n '2p' wakeword.txt)
-          THRESHOLD=$(sed -n '3p' wakeword.txt)
-          echo "唤醒词拼音=$PINYIN 显示=$DISPLAY 阈值=$THRESHOLD"
-          cd xiaozhi
-          python ../patch_build.py "$PINYIN" "$DISPLAY" "$THRESHOLD"
 
       # 4. 编译（只编译你这一块板，几分钟）
       - name: 编译固件
@@ -52,13 +45,14 @@ jobs:
         working-directory: xiaozhi
         run: |
           source "$IDF_PATH/export.sh"
-          # zh-CN 中文界面；wake-word=xiaozhi 用自定义唤醒词（见唤醒词配置.txt）
-          python scripts/build.py lckfb/szpi-esp32s3 --name lichuang-dev --language zh-CN --wake-word xiaozhi
+          # zh-CN 中文界面；wake-word=wn9_hai1xiao3ou1_tts3 用官方内置短唤醒词"嗨小欧"
+          # 内置 wakenet 模型，与"你好小智"同源，稳定不崩
+          python scripts/build.py lckfb/szpi-esp32s3 --name lichuang-dev --language zh-CN --wake-word wn9_hai1xiao3ou1_tts3
 
       # 5. 把编译好的固件存起来供下载
       - name: 上传固件
         uses: actions/upload-artifact@v4
         with:
-          name: 立创实战派-拍照传电脑版-中文
+          name: 立创实战派-拍照传电脑版-嗨小欧唤醒词
           path: xiaozhi/build/merged-binary.bin
           if-no-files-found: error
