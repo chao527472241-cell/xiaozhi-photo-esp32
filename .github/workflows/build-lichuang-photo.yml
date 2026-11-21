@@ -44,12 +44,13 @@ jobs:
         working-directory: xiaozhi
         run: |
           source "$IDF_PATH/export.sh"
-          python scripts/build.py lckfb/szpi-esp32s3 --name lichuang-dev
+          # zh-CN 中文界面；wake-word=nihaoxiaozhi 唤醒词"你好小智"
+          python scripts/build.py lckfb/szpi-esp32s3 --name lichuang-dev --language zh-CN --wake-word nihaoxiaozhi
 
       # 5. 把编译好的固件存起来供下载
       - name: 上传固件
         uses: actions/upload-artifact@v4
         with:
-          name: 立创实战派-拍照传电脑版
+          name: 立创实战派-拍照传电脑版-中文
           path: xiaozhi/build/merged-binary.bin
           if-no-files-found: error
