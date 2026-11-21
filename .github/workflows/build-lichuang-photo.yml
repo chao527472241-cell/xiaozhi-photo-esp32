@@ -32,12 +32,15 @@ jobs:
           path: xiaozhi
           fetch-depth: 0
 
-      # 3. 用改好的文件覆盖官方摄像头驱动（拍照传电脑改造）
-      - name: 应用拍照传电脑改造
+      # 3. 应用改造：拍照传电脑 + 静默转发（触发词只发电脑不接话）
+      - name: 应用改造
         shell: bash
         run: |
           cp esp32_camera.cc xiaozhi/main/boards/common/esp32_camera.cc
           echo "已覆盖摄像头驱动文件"
+          cd xiaozhi
+          python ../patch_silence.py
+          echo "已注入静默转发补丁"
 
       # 4. 编译（只编译你这一块板，几分钟）
       - name: 编译固件
@@ -53,6 +56,6 @@ jobs:
       - name: 上传固件
         uses: actions/upload-artifact@v4
         with:
-          name: 立创实战派-拍照传电脑版-嗨小欧唤醒词
+          name: 立创实战派-拍照传电脑版-嗨小欧-静默转发
           path: xiaozhi/build/merged-binary.bin
           if-no-files-found: error
