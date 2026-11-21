@@ -18,11 +18,17 @@
 
 #define TAG "Esp32Camera"
 
+// 拍照后让小智静默：引用 application.cc 定义的全局开关
+extern volatile bool g_pc_mute;
+
 // ===== [PC-PHOTO] 自定义：把拍到的 JPEG 通过串口发给电脑 =====
 // 电脑端脚本识别帧标记，解码 base64 后把原图贴进 WorkBuddy。
 // 用 printf 直接写 stdout（日志串口），帧标记独立成行，避免和 ESP_LOG 混在一起。
 static void pc_photo_dump_jpeg(const uint8_t* data, size_t len) {
     if (data == nullptr || len == 0) return;
+
+    // 拍照传电脑：打开喇叭静默，避免小智评论照片
+    g_pc_mute = true;
 
     // base64 输出长度 = 4 * ceil(len/3)，另加结尾 null。
     // 直接按上限分配，不用探测调用（探测调用会返回 BUFFER_TOO_SMALL，
