@@ -20,7 +20,7 @@ import os
 import sys
 
 LCD = "main/display/lcd_display.cc"
-ASSETS = "pc_assets.h"
+ASSETS_CANDIDATES = ["main/display/pc_assets.h", "pc_assets.h"]
 CONFIG = "screen_config.txt"
 MARK = "PC_SCREEN_PANEL_PATCH"
 
@@ -504,10 +504,19 @@ def main():
             .replace("__DARK__", dark)
             .replace("__BOOT__", str(boot)))
 
-    for p in (LCD, ASSETS):
-        if not os.path.exists(p):
-            print("[错误] 找不到 " + p)
-            sys.exit(1)
+    assets = None
+    for cand in ASSETS_CANDIDATES:
+        if os.path.exists(cand):
+            assets = cand
+            break
+    if assets is None:
+        print("[错误] 找不到 pc_assets.h（先运行 make_assets.py 生成）")
+        sys.exit(1)
+    print("[补丁] 使用图片资源: " + assets)
+
+    if not os.path.exists(LCD):
+        print("[错误] 找不到 " + LCD)
+        sys.exit(1)
 
     with open(LCD, encoding="utf-8") as f:
         src = f.read()
