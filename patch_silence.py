@@ -59,6 +59,11 @@ def main():
 // === PC 静默转发：全局喇叭静默开关（esp32_camera.cc 用 extern 引用）===
 volatile bool g_pc_mute = false;
 
+// 最近一次按下 BOOT 的时间（微秒；0 = 从没按过）。
+// esp32_camera.cc 用它区分「按键拍照」和「唤醒词拍照」：
+//   按键拍照 → 静默掉点评；唤醒词拍照 → 正常点评。
+volatile int64_t g_pc_ptt_last_us = 0;
+
 // 静默保持：所有打开静默的地方都必须走 pc_mute_hold / pc_mute_set，
 // 由定时器兜底关闭。原因：拍照点评、云端回复都比触发点晚很多秒，
 // 写死成"永不恢复"会一直哑着；而当场清掉又会让小智把要打给电脑的话念出来。
@@ -116,6 +121,16 @@ void pc_mute_set(uint32_t ms) {
     esp_timer_stop(s_pc_mute_timer);
     esp_timer_start_once(s_pc_mute_timer, (uint64_t)ms * 1000ULL);
     s_pc_mute_deadline = esp_timer_get_time() + (int64_t)ms * 1000;
+}
+
+// 立即取消静默。双击 BOOT 直拍时用：第一下已经把静默开到 120 秒，
+// 第二下确认是拍照就必须立刻解掉，否则拍完 2 分钟内喊不应。
+void pc_mute_off() {
+    g_pc_mute = false;
+    s_pc_mute_deadline = 0;
+    if (s_pc_mute_timer != nullptr) {
+        esp_timer_stop(s_pc_mute_timer);
+    }
 }
 // === 补丁 ==='''
     src = src.replace(inc_anchor,
