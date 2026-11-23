@@ -23,16 +23,32 @@ extern volatile bool g_pc_mute;
 // 带定时器的静默：拍照点评要十几秒才播完，必须在 application.cc 里用
 // 一次性定时器兜底关闭，否则会一直哑着。
 extern void pc_mute_hold(uint32_t ms);
+// 最近一次按下 BOOT 的时间（微秒，0 表示从没按过）。
+// 用它区分「按键拍照」和「唤醒词拍照」：
+//   按键拍照 → 用户本来就不想让小智开口，静默掉点评；
+//   唤醒词拍照 → 保持官方体验，正常点评。
+extern volatile int64_t g_pc_ptt_last_us;
+
+static bool pc_in_ptt_session() {
+    int64_t t = g_pc_ptt_last_us;
+    if (t <= 0) {
+        return false;
+    }
+    return (esp_timer_get_time() - t) < 20LL * 1000000LL;
+}
 
 // ===== [PC-PHOTO] 自定义：把拍到的 JPEG 通过串口发给电脑 =====
 // 电脑端脚本识别帧标记，解码 base64 后把原图贴进 WorkBuddy。
 // 用 printf 直接写 stdout（日志串口），帧标记独立成行，避免和 ESP_LOG 混在一起。
-static void pc_photo_dump_jpeg(const uint8_t* data, size_t len) {
+// mute=true 时顺带静默喇叭（按键会话 / 云端 tool call 路径）。
+static void pc_photo_dump_jpeg(const uint8_t* data, size_t len, bool mute) {
     if (data == nullptr || len == 0) return;
 
-    // 拍照传电脑：打开喇叭静默 25 秒，够 LLM 生成点评 + 把点评播完，
-    // 避免小智念照片。（点评通常在拍照后 3~8 秒开始，10~15 秒播完）
-    pc_mute_hold(25000);
+    // 静默 25 秒：够 LLM 生成点评 + 播完，避免小智念照片。
+    // 只在按键会话里做，唤醒词拍照不动它（要继续能点评）。
+    if (mute) {
+        pc_mute_hold(25000);
+    }
 
     // base64 输出长度 = 4 * ceil(len/3)，另加结尾 null。
     // 直接按上限分配，不用探测调用（探测调用会返回 BUFFER_TOO_SMALL，
@@ -285,7 +301,9 @@ std::expected<std::string, std::string> Esp32Camera::Explain(const std::string& 
     }
 
     // ===== [PC-PHOTO] 在发送给云端之前，先把同一份 JPEG 通过串口发给电脑 =====
-    pc_photo_dump_jpeg(jpeg_data, jpeg_size);
+    // 静默只在「按键会话」里生效：按 BOOT 说话的场合，用户不想让小智开口；
+    // 用唤醒词说的"拍张照"走正常流程，点评照常（保持官方体验）。
+    pc_photo_dump_jpeg(jpeg_data, jpeg_size, pc_in_ptt_session());
     // ===== [PC-PHOTO] 结束 =====
 
     const std::string boundary = "----ESP32_CAMERA_BOUNDARY";
@@ -363,4 +381,66 @@ std::expected<std::string, std::string> Esp32Camera::Explain(const std::string& 
              current_fb_->width, current_fb_->height, (int)jpeg_size, (int)remain_stack_size,
              question.c_str(), result.c_str());
     return result;
+}
+
+// ===== [PC-PHOTO] 双击 BOOT 直接拍照 =====
+// 拍一张 → 编码成 JPEG → 直接从串口发给电脑。
+// 不经过云端，所以既没有问答也没有点评，连网都不需要。
+bool Esp32Camera::CaptureToSerial() {
+    if (!Capture()) {
+        ESP_LOGE(TAG, "[PC-PHOTO] direct capture failed");
+        return false;
+    }
+    if (current_fb_ == nullptr) {
+        return false;
+    }
+
+    const uint16_t w = current_fb_->width;
+    const uint16_t h = current_fb_->height;
+    v4l2_pix_fmt_t enc_fmt;
+    switch (current_fb_->format) {
+        case PIXFORMAT_RGB565:
+            enc_fmt = V4L2_PIX_FMT_RGB565;
+            break;
+        case PIXFORMAT_YUV422:
+            enc_fmt = V4L2_PIX_FMT_YUYV;
+            break;
+        case PIXFORMAT_YUV420:
+            enc_fmt = V4L2_PIX_FMT_YUV420;
+            break;
+        case PIXFORMAT_GRAYSCALE:
+            enc_fmt = V4L2_PIX_FMT_GREY;
+            break;
+        case PIXFORMAT_JPEG:
+            enc_fmt = V4L2_PIX_FMT_JPEG;
+            break;
+        case PIXFORMAT_RGB888:
+            enc_fmt = V4L2_PIX_FMT_RGB24;
+            break;
+        default:
+            ESP_LOGE(TAG, "[PC-PHOTO] unsupported pixel format: %d", current_fb_->format);
+            return false;
+    }
+
+    uint8_t* jpeg_src_buf = current_fb_->buf;
+    size_t jpeg_src_len = current_fb_->len;
+    if (current_fb_->format == PIXFORMAT_RGB565 && encode_buf_ != nullptr) {
+        jpeg_src_buf = encode_buf_;
+        jpeg_src_len = encode_buf_size_;
+    }
+
+    uint8_t* jpeg_data = nullptr;
+    size_t jpeg_size = 0;
+    if (!image_to_jpeg(jpeg_src_buf, jpeg_src_len, w, h, enc_fmt, 80, &jpeg_data, &jpeg_size) ||
+        jpeg_data == nullptr || jpeg_size == 0) {
+        free(jpeg_data);
+        ESP_LOGE(TAG, "[PC-PHOTO] direct encode failed");
+        return false;
+    }
+
+    // 直拍不静默：这条路径不会让云端说话，保持喇叭可用
+    pc_photo_dump_jpeg(jpeg_data, jpeg_size, false);
+    ESP_LOGI(TAG, "[PC-PHOTO] direct shot %dx%d jpeg=%u", w, h, (unsigned)jpeg_size);
+    free(jpeg_data);
+    return true;
 }
