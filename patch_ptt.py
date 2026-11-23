@@ -93,8 +93,38 @@ def main():
             inc_anchor,
             inc_anchor
             + "\n\n// === PTT 补丁：引用 application.cc 的全局标志 ===\n"
+            + "#include <esp_timer.h>\n"
             + "extern volatile bool g_ptt_active;\nextern volatile bool g_pc_mute;\n"
-            + "static bool s_boot_ptt_on = false;\n// === PTT 补丁结束 ===",
+            + "static bool s_boot_ptt_on = false;\n"
+            + "\n"
+            + "// 第二下 BOOT 之后的静默宽限期。\n"
+            + "// 云端的最终 STT 结果、LLM 回复、拍照点评都比 PC_PTT_END 晚 1~3 秒才回来。\n"
+            + "// 若在按键那一刻就清 g_pc_mute / g_ptt_active，小智会把\"给电脑\"的话\n"
+            + "// 当成普通聊天大声回答，还会点评照片（实测踩过）。\n"
+            + "// 所以改成：按下停止键后先保持静默，由一次性定时器兜底清理。\n"
+            + "static esp_timer_handle_t s_ptt_grace = nullptr;\n"
+            + "static void pc_ptt_grace_cb(void*) {\n"
+            + "    g_ptt_active = false;\n"
+            + "    g_pc_mute = false;\n"
+            + "    ESP_LOGI(\"PTT\", \"PC_PTT_GRACE_END\");\n"
+            + "}\n"
+            + "static void pc_ptt_grace_arm(uint32_t ms) {\n"
+            + "    if (s_ptt_grace == nullptr) {\n"
+            + "        esp_timer_create_args_t a = {};\n"
+            + "        a.callback = pc_ptt_grace_cb;\n"
+            + "        a.arg = nullptr;\n"
+            + "        a.dispatch_method = ESP_TIMER_TASK;\n"
+            + "        a.name = \"ptt_grace\";\n"
+            + "        esp_timer_create(&a, &s_ptt_grace);\n"
+            + "    } else {\n"
+            + "        esp_timer_stop(s_ptt_grace);\n"
+            + "    }\n"
+            + "    esp_timer_start_once(s_ptt_grace, (uint64_t)ms * 1000ULL);\n"
+            + "}\n"
+            + "static void pc_ptt_grace_disarm() {\n"
+            + "    if (s_ptt_grace != nullptr) esp_timer_stop(s_ptt_grace);\n"
+            + "}\n"
+            + "// === PTT 补丁结束 ===",
             1,
         )
 
@@ -126,17 +156,21 @@ def main():
                 return;
             }
             s_boot_ptt_on = !s_boot_ptt_on;
-            g_ptt_active = s_boot_ptt_on;
             if (s_boot_ptt_on) {
                 // 开始拾音：ManualStop 模式，不会自动结束；静默喇叭
+                pc_ptt_grace_disarm();   // 连按两次时，取消上一轮残留的宽限期
+                g_ptt_active = true;
                 g_pc_mute = true;
                 ESP_LOGI("PTT", "PC_PTT_BEGIN");
                 app.StartListening();
             } else {
-                // 停止拾音：发结束标记，电脑端据此合并贴入
+                // 停止拾音：发结束标记，电脑端据此合并贴入。
+                // 这里【绝不能】直接清 g_ptt_active / g_pc_mute：
+                // 云端识别结果和回复要晚 1~3 秒才回来，提前清掉就会变成
+                // "小智把要打给电脑的话当成聊天大声回答 + 顺便点评照片"。
                 app.StopListening();
-                g_pc_mute = false;
                 ESP_LOGI("PTT", "PC_PTT_END");
+                pc_ptt_grace_arm(5000);  // 保持静默 5 秒，期间照收文字、不出声
             }
             // === PTT 补丁：结束（原 ToggleChatState 逻辑已被本补丁取代）===
         });'''
