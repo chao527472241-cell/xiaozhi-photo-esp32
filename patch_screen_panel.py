@@ -9,7 +9,7 @@
   2) 触摸屏右下角两个按钮：「下一页」「主题」，点一下即切换
   3) 明暗主题即时切换（只改本面板 + 屏幕底色，不碰官方 SetTheme，避免加锁冲突）
   4) NVS 断电记忆：页面、主题重启后保持
-  5) 配置来自 屏幕设置.txt：标语、表情序列、切换速度、默认页、默认主题、信息项开关
+  5) 配置来自 screen_config.txt：标语、表情序列、切换速度、默认页、默认主题、信息项开关
 
 实现说明（只改 lcd_display.cc，不碰别的补丁文件）：
   - 锚点与已编译成功的 patch_screen_info.py 完全一致，降低风险
@@ -24,7 +24,7 @@ import os
 import sys
 
 LCD = "main/display/lcd_display.cc"
-CFG = "屏幕设置.txt"
+CFG = "screen_config.txt"
 MARK = "PC_SCREEN_PANEL_PATCH"
 
 
@@ -104,7 +104,7 @@ def build_helper(cfg):
 #include "esp_netif.h"
 #include "esp_wifi.h"
 
-// --- 由电脑端 屏幕设置.txt 生成的配置常量 ---
+// --- 由电脑端 screen_config.txt 生成的配置常量 ---
 static const bool  PC_SHOW_SECONDS = __SHOW_SECONDS__;
 static const bool  PC_SHOW_IP      = __SHOW_IP__;
 static const bool  PC_SHOW_HEAP    = __SHOW_HEAP__;
