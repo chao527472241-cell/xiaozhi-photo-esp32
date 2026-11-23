@@ -59,10 +59,27 @@ jobs:
           # 内置 wakenet 模型，与"你好小智"同源，稳定不崩
           python scripts/build.py lckfb/szpi-esp32s3 --name lichuang-dev --language zh-CN --wake-word wn9_hai1xiao3ou1_tts3
 
-      # 5. 把编译好的固件存起来供下载
+      # 5. 用 ELF 解析崩溃 backtrace 地址（调试用）
+      - name: 解析崩溃符号
+        shell: bash
+        working-directory: xiaozhi
+        run: |
+          source "$IDF_PATH/export.sh"
+          ELF=$(find build -name "*.elf" | head -1)
+          echo "ELF=$ELF"
+          if [ -n "$ELF" ]; then
+            xtensa-esp32s3-elf-addr2line -e "$ELF" -f -C -i \
+              0x420de2c5 0x420e3242 0x420e353c 0x420ebb98 \
+              0x421b9b7d 0x420d4595 0x420d96b9 0x420e373c > ../crash_symbols.txt || true
+            cat ../crash_symbols.txt
+          fi
+
+      # 6. 把编译好的固件存起来供下载
       - name: 上传固件
         uses: actions/upload-artifact@v4
         with:
           name: 立创实战派-拍照传电脑版-嗨小欧-可配置屏幕面板
-          path: xiaozhi/build/merged-binary.bin
+          path: |
+            xiaozhi/build/merged-binary.bin
+            crash_symbols.txt
           if-no-files-found: error
