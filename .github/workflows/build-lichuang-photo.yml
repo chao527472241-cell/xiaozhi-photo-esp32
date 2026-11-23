@@ -38,10 +38,12 @@ jobs:
         run: |
           cp esp32_camera.cc xiaozhi/main/boards/common/esp32_camera.cc
           echo "已覆盖摄像头驱动文件"
-          # 生成屏幕图片资源（壁纸/图标/数字），失败就退回仓库里已有的 pc_assets.h
-          pip install --quiet pillow || pip install --quiet --break-system-packages pillow || true
+          # 生成屏幕图片资源（壁纸/图标/数字）；容器里通常没有 pip/Pillow，
+          # 失败就退回仓库里已经生成好的 pc_assets.h（内容完全一致）
+          python -m pip install --quiet pillow 2>/dev/null || true
           python make_assets.py || echo "资源生成失败，使用仓库自带 pc_assets.h"
-          cp pc_assets.h xiaozhi/main/display/pc_assets.h
+          cp -f pc_assets.h xiaozhi/main/display/pc_assets.h
+          ls -l xiaozhi/main/display/pc_assets.h
           echo "已放入屏幕图片资源"
           cd xiaozhi
           # 屏幕配置文件从仓库根目录拷进编译目录，供补丁读取
