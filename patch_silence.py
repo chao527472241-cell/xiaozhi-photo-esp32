@@ -184,6 +184,34 @@ void pc_mute_off() {
                 // === 补丁结束 ==='''
     src = src.replace(stt_anchor, stt_new, 1)
 
+    # --- 4) tt 字幕：静默窗口内连字幕一起压住 ---
+    # 只丢音频是不够的：g_pc_mute 让喇叭出不了声，但 sentence_start 仍会把
+    # 小智说的话 SetChatMessage("assistant", ...) 显示到屏幕上。
+    # 用户看到的就是「没声音、但屏幕上在点评照片」。
+    sub_anchor = '''                    ESP_LOGI(TAG, "<< %s", text->valuestring);
+                    Schedule([display, message = std::string(text->valuestring),
+                              glyphs = std::move(glyphs), bpp]() {
+                        display->AddTextGlyphs(glyphs, bpp);
+                        display->SetChatMessage("assistant", message.c_str());
+                    });'''
+    sub_new = '''                    ESP_LOGI(TAG, "<< %s", text->valuestring);
+                    Schedule([display, message = std::string(text->valuestring),
+                              glyphs = std::move(glyphs), bpp]() {
+                        if (g_pc_mute) {
+                            // 静默窗口内：小智这句话连字幕都不显示。
+                            // 否则会出现「不出声，但屏幕上在点评照片」。
+                            // 文字已经通过上面的 << 行进了串口日志，排查时仍能看到。
+                            ESP_LOGI(TAG, "<< PC_SUBTITLE_MUTED");
+                            return;
+                        }
+                        display->AddTextGlyphs(glyphs, bpp);
+                        display->SetChatMessage("assistant", message.c_str());
+                    });'''
+    if sub_anchor not in src:
+        print("[错误] 找不到 tts sentence_start 锚点")
+        sys.exit(1)
+    src = src.replace(sub_anchor, sub_new, 1)
+
     with open(APP, "w", encoding="utf-8") as f:
         f.write(src)
     print("[完成] 已注入静默补丁到", APP)
