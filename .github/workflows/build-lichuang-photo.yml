@@ -32,7 +32,7 @@ jobs:
           path: xiaozhi
           fetch-depth: 0
 
-      # 3. 应用改造：拍照传电脑 + 静默转发（触发词只发电脑不接话）
+      # 3. 应用改造：拍照传电脑 + 静默转发 + BOOT 按键 PTT
       - name: 应用改造
         shell: bash
         run: |
@@ -41,6 +41,8 @@ jobs:
           cd xiaozhi
           python ../patch_silence.py
           echo "已注入静默转发补丁"
+          python ../patch_ptt.py
+          echo "已注入 BOOT 按键 PTT 补丁"
 
       # 4. 编译（只编译你这一块板，几分钟）
       - name: 编译固件
