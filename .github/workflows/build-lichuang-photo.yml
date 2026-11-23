@@ -37,7 +37,8 @@ jobs:
         shell: bash
         run: |
           cp esp32_camera.cc xiaozhi/main/boards/common/esp32_camera.cc
-          echo "已覆盖摄像头驱动文件"
+          cp esp32_camera.h xiaozhi/main/boards/common/esp32_camera.h
+          echo "已覆盖摄像头驱动文件（含头文件，支持双击直拍）"
           # 生成屏幕图片资源（壁纸/图标/数字）；容器里通常没有 pip/Pillow，
           # 失败就退回仓库里已经生成好的 pc_assets.h（内容完全一致）
           python -m pip install --quiet pillow 2>/dev/null || true
