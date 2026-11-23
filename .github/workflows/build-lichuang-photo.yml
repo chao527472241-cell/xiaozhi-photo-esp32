@@ -43,6 +43,8 @@ jobs:
           echo "已注入静默转发补丁"
           python ../patch_ptt.py
           echo "已注入 BOOT 按键 PTT 补丁"
+          python ../patch_screen_info.py
+          echo "已注入待机屏幕信息补丁（时间/日期/星期）"
 
       # 4. 编译（只编译你这一块板，几分钟）
       - name: 编译固件
