@@ -97,10 +97,23 @@ def main():
             inc_anchor
             + "\n\n// === PTT 补丁：引用 application.cc 的全局标志 ===\n"
             + "#include <esp_timer.h>\n"
+            + "#include <freertos/FreeRTOS.h>\n"
+            + "#include <freertos/task.h>\n"
             + "extern volatile bool g_ptt_active;\nextern volatile bool g_pc_mute;\n"
             + "extern void pc_mute_hold(uint32_t ms);  // 只延长不缩短，application.cc 定义\n"
             + "extern void pc_mute_set(uint32_t ms);   // 强制设定，可缩短\n"
+            + "extern void pc_mute_off();               // 立刻解掉静默\n"
+            + "extern volatile int64_t g_pc_ptt_last_us;  // 最近按 BOOT 的时刻，摄像头据此判断是否点评\n"
             + "static bool s_boot_ptt_on = false;\n"
+            + "static int64_t s_last_click_us = 0;\n"
+            + "\n"
+            + "// 双击 BOOT 直拍：独立任务执行，避免在按键回调线程里做 JPEG 编码（栈不够）。\n"
+            + "static void pc_shot_task(void* arg) {\n"
+            + "    auto* cam = static_cast<Esp32Camera*>(arg);\n"
+            + "    bool ok = (cam != nullptr) && cam->CaptureToSerial();\n"
+            + "    ESP_LOGI(\"PTT\", \"PC_SHOT_DONE ok=%d\", ok ? 1 : 0);\n"
+            + "    vTaskDelete(nullptr);\n"
+            + "}\n"
             + "\n"
             + "// 第二下 BOOT 之后只负责撤掉 g_ptt_active（让后续对话恢复正常判断）。\n"
             + "// 静默本身交给 pc_mute_hold() 的定时器，因为云端 STT、LLM 回复、\n"
@@ -157,6 +170,27 @@ def main():
                 st != kDeviceStateSpeaking) {
                 return;
             }
+
+            // === 双击直拍：700ms 内连按两下 = 直接拍照（不说话、不点评、不走云端）===
+            int64_t now_us = esp_timer_get_time();
+            bool dbl = (s_last_click_us != 0) && ((now_us - s_last_click_us) < 700000);
+            s_last_click_us = now_us;
+            if (dbl && s_boot_ptt_on) {
+                // 第一下已经把"开始拾音"做了，这里撤销它，直接拍
+                s_boot_ptt_on = false;
+                g_ptt_active = false;
+                pc_ptt_grace_disarm();
+                app.StopListening();
+                ESP_LOGI("PTT", "PC_PTT_END");    // 让电脑端收尾，别一直挂着
+                pc_mute_set(6000);                // 挡住可能的空识别回复，不挡正常使用
+                ESP_LOGI("PTT", "PC_SHOT_BEGIN");
+                xTaskCreate(pc_shot_task, "pc_shot", 8192, camera_, 5, nullptr);
+                return;
+            }
+
+            // 标记"这是一次按键操作"，摄像头据此决定按键拍照不点评
+            g_pc_ptt_last_us = now_us;
+
             s_boot_ptt_on = !s_boot_ptt_on;
             if (s_boot_ptt_on) {
                 // 开始拾音：ManualStop 模式，不会自动结束；静默喇叭
