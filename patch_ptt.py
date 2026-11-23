@@ -106,6 +106,10 @@ def main():
             + "extern volatile int64_t g_pc_ptt_last_us;  // 最近按 BOOT 的时刻，摄像头据此判断是否点评\n"
             + "static bool s_boot_ptt_on = false;\n"
             + "static int64_t s_last_click_us = 0;\n"
+            + "// 直拍刚触发过的时刻：用来吞掉随之而来的多余 OnClick。\n"
+            + "// 长按松开、双击的第二下都会再送一次单击事件，不吞掉就会\n"
+            + "// 把刚拍完的状态又切进聆听，照片旁边跟着一条空识别。\n"
+            + "static volatile int64_t s_last_shot_us = 0;\n"
             + "\n"
             + "// 双击 BOOT 直拍：独立任务执行，避免在按键回调线程里做 JPEG 编码（栈不够）。\n"
             + "static void pc_shot_task(void* arg) {\n"
@@ -143,7 +147,39 @@ def main():
             1,
         )
 
-        # 2b) 替换 BOOT OnClick 回调体
+        # 2b) 在类里加直拍函数（InitializeButtons 之前），供单击/双击/长按共用
+        shot_anchor = "    void InitializeButtons() {"
+        shot_member = '''    // === PTT 补丁：直拍 ===
+    // 取一帧 → 编码 JPEG → 直接从串口发给电脑，不经过云端。
+    // 所以不说话、不联网、没有 LLM，也就不可能有声音或字幕点评。
+    // 独立任务执行是因为按键回调线程的栈不够做 JPEG 编码。
+    void PcShot() {
+        auto& app = Application::GetInstance();
+        if (app.GetDeviceState() == kDeviceStateStarting) {
+            return;  // 配网阶段别抢按键
+        }
+        // 双击时第一下已经开了聆听，这里撤掉，免得把拍照时的杂音传上云端
+        if (s_boot_ptt_on) {
+            s_boot_ptt_on = false;
+            g_ptt_active = false;
+            pc_ptt_grace_disarm();
+            app.StopListening();
+            ESP_LOGI("PTT", "PC_PTT_END");
+        }
+        s_last_shot_us = esp_timer_get_time();
+        pc_mute_set(6000);  // 挡住可能回来的空识别回复
+        ESP_LOGI("PTT", "PC_SHOT_BEGIN");
+        xTaskCreate(pc_shot_task, "pc_shot", 8192, camera_, 5, nullptr);
+    }
+
+'''
+        if shot_anchor not in board:
+            print("[错误] 找不到 InitializeButtons 锚点")
+            sys.exit(1)
+        if "void PcShot()" not in board:
+            board = board.replace(shot_anchor, shot_member + shot_anchor, 1)
+
+        # 2c) 替换 BOOT OnClick 回调体
         old_click = '''        boot_button_.OnClick([this]() {
             auto& app = Application::GetInstance();
             // During startup (before connected), pressing BOOT button enters Wi-Fi config mode without reboot
@@ -171,20 +207,22 @@ def main():
                 return;
             }
 
-            // === 双击直拍：700ms 内连按两下 = 直接拍照（不说话、不点评、不走云端）===
+            // === 刚直拍过：把这次多出来的单击吞掉 ===
+            // 长按松开、双击的第二下都会再送一次单击，不吞就会把刚拍完
+            // 的状态又切回聆听，照片后面跟着一条空识别。
+            if (s_last_shot_us != 0 && (esp_timer_get_time() - s_last_shot_us) < 2000000) {
+                return;
+            }
+
+            // === 双击直拍：1.2 秒内连按两下 = 直接拍照 ===
+            // 阈值从 700ms 放宽到 1200ms：按键组件的 OnClick 是「松开」那一刻
+            // 才触发，两次按下+松开很容易超过 700ms，用户实测时灵时不灵。
+            // 长按 BOOT（0.9 秒）是更可靠的直拍方式，见下面的 OnLongPress。
             int64_t now_us = esp_timer_get_time();
-            bool dbl = (s_last_click_us != 0) && ((now_us - s_last_click_us) < 700000);
+            bool dbl = (s_last_click_us != 0) && ((now_us - s_last_click_us) < 1200000);
             s_last_click_us = now_us;
-            if (dbl && s_boot_ptt_on) {
-                // 第一下已经把"开始拾音"做了，这里撤销它，直接拍
-                s_boot_ptt_on = false;
-                g_ptt_active = false;
-                pc_ptt_grace_disarm();
-                app.StopListening();
-                ESP_LOGI("PTT", "PC_PTT_END");    // 让电脑端收尾，别一直挂着
-                pc_mute_set(6000);                // 挡住可能的空识别回复，不挡正常使用
-                ESP_LOGI("PTT", "PC_SHOT_BEGIN");
-                xTaskCreate(pc_shot_task, "pc_shot", 8192, camera_, 5, nullptr);
+            if (dbl) {
+                PcShot();
                 return;
             }
 
@@ -211,8 +249,27 @@ def main():
                 pc_mute_set(9000);        // 9 秒静默（强制缩短，覆盖上面的 120 秒）
             }
             // === PTT 补丁：结束（原 ToggleChatState 逻辑已被本补丁取代）===
+        });
+
+        // === PTT 补丁：长按 BOOT 0.9 秒 = 直接拍照 ===
+        // 单击/双击都要靠时间差猜，长按是组件原生事件，按住到点就触发，
+        // 不会和"按一下说话"打架，是三种方式里最稳的一种。
+        boot_button_.OnLongPress([this]() {
+            PcShot();
         });'''
         board = must_replace(board, old_click, new_click, "BOOT OnClick 回调")
+
+        # 2d) 构造函数里给 BOOT 键设长按阈值（原来是 0 = 用组件默认值，
+        #     不同版本的默认值不一样，实测里长按可能一直不触发）
+        old_ctor = "LichuangDevBoard() : boot_button_(BOOT_BUTTON_GPIO) {"
+        new_ctor = "LichuangDevBoard() : boot_button_(BOOT_BUTTON_GPIO, false, 900, 0) {"
+        if old_ctor in board:
+            board = board.replace(old_ctor, new_ctor, 1)
+            print("[补丁] BOOT 长按阈值已设为 900ms")
+        elif new_ctor in board:
+            print("[跳过] BOOT 长按阈值已是 900ms")
+        else:
+            print("[警告] 没找到构造函数，长按可能用组件默认阈值")
 
         with open(BOARD, "w", encoding="utf-8") as f:
             f.write(board)
