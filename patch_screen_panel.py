@@ -531,11 +531,16 @@ def main():
         sys.exit(1)
     src = src.replace(decl_anchor, decl_anchor + code, 1)
 
+    # 注意：lcd_display.cc 里的 SetupUI 有两份（#if CONFIG_USE_WECHAT_MESSAGE_STYLE 的两支），
+    # 只有一支会被真正编译。所以两个分支都要插入调用，否则可能插进没启用的那份里，
+    # 结果就是"补丁注入了、编译也过了，但界面根本没出现"（踩过）。
     end_anchor = "    lv_obj_center(low_battery_label_);"
-    if end_anchor not in src:
+    n_hit = src.count(end_anchor)
+    if n_hit == 0:
         print("[错误] 找不到 SetupUI 结尾锚点")
         sys.exit(1)
-    src = src.replace(end_anchor, "    pc_build_ui(screen);\n" + end_anchor, 1)
+    src = src.replace(end_anchor, "    pc_build_ui(screen);\n" + end_anchor)
+    print("[补丁] SetupUI 分支插入调用 %d 处（只有启用的那支会生效）" % n_hit)
 
     with open(LCD, "w", encoding="utf-8") as f:
         f.write(src)
