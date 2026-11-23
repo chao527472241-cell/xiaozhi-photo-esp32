@@ -40,7 +40,8 @@ DEFAULTS = {
     "show_signal": "1",
     "slogan": "你好，我是小智",
     "emoji_interval": "900",
-    "emojis": "😀,😊,😄,🤖,👀,🌟,🌈",
+    # 用 BUILTIN_TEXT_FONT 支持的符号，不要用 emoji 字体（emoji 字体渲染会崩）
+    "emojis": "★,♥,✿,◆,●,▲,☀",
 }
 
 
@@ -312,10 +313,11 @@ def build_create():
     lv_label_set_text(s_pc_status, "");
     lv_obj_align(s_pc_status, LV_ALIGN_CENTER, 0, 6);
 
-    // 动图页
+    // 动图页（用内置字体显示符号，避免 emoji 字体渲染崩溃）
     s_pc_emoji = lv_label_create(screen);
-    lv_obj_set_style_text_font(s_pc_emoji, &font_noto_emoji_30_4, 0);
-    lv_label_set_text(s_pc_emoji, PC_EMOJI_COUNT > 0 ? PC_EMOJIS[0] : "😀");
+    lv_obj_set_style_text_font(s_pc_emoji, &BUILTIN_TEXT_FONT, 0);
+    lv_obj_set_style_text_color(s_pc_emoji, lv_color_hex(0xFFD54F), 0);
+    lv_label_set_text(s_pc_emoji, PC_EMOJI_COUNT > 0 ? PC_EMOJIS[0] : "★");
     lv_obj_align(s_pc_emoji, LV_ALIGN_CENTER, 0, -16);
 
     s_pc_slogan = lv_label_create(screen);
