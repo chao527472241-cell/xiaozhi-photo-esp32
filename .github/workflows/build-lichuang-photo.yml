@@ -55,6 +55,9 @@ jobs:
           echo "已注入 BOOT 按键 PTT 补丁"
           python ../patch_screen_panel.py
           echo "已注入触摸界面补丁（磁贴桌面/时钟/状态/设置）"
+          # 自检：确认调用真的写进了源码（防止插到未启用的 SetupUI 分支里）
+          grep -c "pc_build_ui(screen)" main/display/lcd_display.cc || true
+          grep -c "pc_assets_map\|pc_wallpaper_map" main/display/pc_assets.h || true
 
       # 4. 编译（只编译你这一块板，几分钟）
       - name: 编译固件
