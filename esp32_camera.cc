@@ -30,8 +30,9 @@ extern void pc_mute_hold(uint32_t ms);
 static void pc_photo_dump_jpeg(const uint8_t* data, size_t len) {
     if (data == nullptr || len == 0) return;
 
-    // 拍照传电脑：打开喇叭静默 20 秒，够 LLM 生成点评 + 播完，避免小智念照片
-    pc_mute_hold(20000);
+    // 拍照传电脑：打开喇叭静默 25 秒，够 LLM 生成点评 + 把点评播完，
+    // 避免小智念照片。（点评通常在拍照后 3~8 秒开始，10~15 秒播完）
+    pc_mute_hold(25000);
 
     // base64 输出长度 = 4 * ceil(len/3)，另加结尾 null。
     // 直接按上限分配，不用探测调用（探测调用会返回 BUFFER_TOO_SMALL，
