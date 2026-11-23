@@ -40,8 +40,8 @@ DEFAULTS = {
     "show_signal": "1",
     "slogan": "你好，我是小智",
     "emoji_interval": "900",
-    # 用 BUILTIN_TEXT_FONT 支持的符号，不要用 emoji 字体（emoji 字体渲染会崩）
-    "emojis": "★,♥,✿,◆,●,▲,☀",
+    # 用纯 ASCII 颜文字：任何字体都有字形，不会触发字体 fallback 崩溃
+    "emojis": "^_^,0_0,^-^,T_T,*_*,>_<,=^_^=",
 }
 
 
@@ -295,33 +295,28 @@ def build_create():
 
     // 时钟页
     s_pc_clock = lv_label_create(screen);
-    lv_obj_set_style_text_font(s_pc_clock, &BUILTIN_TEXT_FONT, 0);
     lv_label_set_text(s_pc_clock, "--:--");
     lv_obj_align(s_pc_clock, LV_ALIGN_CENTER, 0, 18);
 
     s_pc_date = lv_label_create(screen);
-    lv_obj_set_style_text_font(s_pc_date, text_font, 0);
     lv_label_set_text(s_pc_date, "");
     lv_obj_align(s_pc_date, LV_ALIGN_CENTER, 0, 54);
 
     // 状态页
     s_pc_status = lv_label_create(screen);
-    lv_obj_set_style_text_font(s_pc_status, text_font, 0);
     lv_obj_set_width(s_pc_status, LV_HOR_RES * 0.86);
     lv_obj_set_style_text_align(s_pc_status, LV_TEXT_ALIGN_LEFT, 0);
     lv_label_set_long_mode(s_pc_status, LV_LABEL_LONG_WRAP);
     lv_label_set_text(s_pc_status, "");
     lv_obj_align(s_pc_status, LV_ALIGN_CENTER, 0, 6);
 
-    // 动图页（用内置字体显示符号，避免 emoji 字体渲染崩溃）
+    // 动图页（用 theme 字体显示符号，避免字体字形回调为空导致崩溃）
     s_pc_emoji = lv_label_create(screen);
-    lv_obj_set_style_text_font(s_pc_emoji, &BUILTIN_TEXT_FONT, 0);
     lv_obj_set_style_text_color(s_pc_emoji, lv_color_hex(0xFFD54F), 0);
     lv_label_set_text(s_pc_emoji, PC_EMOJI_COUNT > 0 ? PC_EMOJIS[0] : "★");
     lv_obj_align(s_pc_emoji, LV_ALIGN_CENTER, 0, -16);
 
     s_pc_slogan = lv_label_create(screen);
-    lv_obj_set_style_text_font(s_pc_slogan, text_font, 0);
     lv_label_set_text(s_pc_slogan, PC_SLOGAN);
     lv_obj_align(s_pc_slogan, LV_ALIGN_CENTER, 0, 46);
 
@@ -335,7 +330,6 @@ def build_create():
     lv_obj_remove_flag(s_pc_btn_page, LV_OBJ_FLAG_SCROLLABLE);
     s_pc_btn_page_txt = lv_label_create(s_pc_btn_page);
     lv_label_set_text(s_pc_btn_page_txt, "下一页");
-    lv_obj_set_style_text_font(s_pc_btn_page_txt, text_font, 0);
     lv_obj_center(s_pc_btn_page_txt);
     lv_obj_add_event_cb(s_pc_btn_page, pc_btn_event_cb, LV_EVENT_CLICKED, nullptr);
 
@@ -349,7 +343,6 @@ def build_create():
     lv_obj_remove_flag(s_pc_btn_theme, LV_OBJ_FLAG_SCROLLABLE);
     s_pc_btn_theme_txt = lv_label_create(s_pc_btn_theme);
     lv_label_set_text(s_pc_btn_theme_txt, "主题");
-    lv_obj_set_style_text_font(s_pc_btn_theme_txt, text_font, 0);
     lv_obj_center(s_pc_btn_theme_txt);
     lv_obj_add_event_cb(s_pc_btn_theme, pc_btn_event_cb, LV_EVENT_CLICKED, nullptr);
 
