@@ -63,9 +63,12 @@ def main():
         stt_new = (
             "                // === PTT 补丁：按键会话期间一律静默转发 ===\n"
             "                if (g_ptt_active) {\n"
-            '                    g_pc_mute = true;\n'
+            "                    // 只静默，绝不再 AbortSpeaking。\n"
+            "                    // AbortSpeaking 会向服务器发 abort，把本轮 LLM 生成连同\n"
+            "                    // 拍照 tool call 一起掐掉 —— 实测导致说「拍张照」不出图。\n"
+            "                    // 静默由音频回调丢包实现，本来就足够不出声。\n"
+            "                    pc_mute_hold(9000);\n"
             '                    ESP_LOGI(TAG, ">> PC_PTT_SPEECH");\n'
-            "                    Schedule([this]() { AbortSpeaking(kAbortReasonNone); });\n"
             "                } else\n"
         )
         if stt_anchor not in app:
@@ -95,17 +98,15 @@ def main():
             + "\n\n// === PTT 补丁：引用 application.cc 的全局标志 ===\n"
             + "#include <esp_timer.h>\n"
             + "extern volatile bool g_ptt_active;\nextern volatile bool g_pc_mute;\n"
+            + "extern void pc_mute_hold(uint32_t ms);  // application.cc 定义，定时器兜底关静默\n"
             + "static bool s_boot_ptt_on = false;\n"
             + "\n"
-            + "// 第二下 BOOT 之后的静默宽限期。\n"
-            + "// 云端的最终 STT 结果、LLM 回复、拍照点评都比 PC_PTT_END 晚 1~3 秒才回来。\n"
-            + "// 若在按键那一刻就清 g_pc_mute / g_ptt_active，小智会把\"给电脑\"的话\n"
-            + "// 当成普通聊天大声回答，还会点评照片（实测踩过）。\n"
-            + "// 所以改成：按下停止键后先保持静默，由一次性定时器兜底清理。\n"
+            + "// 第二下 BOOT 之后只负责撤掉 g_ptt_active（让后续对话恢复正常判断）。\n"
+            + "// 静默本身交给 pc_mute_hold() 的定时器，因为云端 STT、LLM 回复、\n"
+            + "// 拍照点评都要晚 1~3 秒才回来，这里提前清掉就会让小智开口。\n"
             + "static esp_timer_handle_t s_ptt_grace = nullptr;\n"
             + "static void pc_ptt_grace_cb(void*) {\n"
             + "    g_ptt_active = false;\n"
-            + "    g_pc_mute = false;\n"
             + "    ESP_LOGI(\"PTT\", \"PC_PTT_GRACE_END\");\n"
             + "}\n"
             + "static void pc_ptt_grace_arm(uint32_t ms) {\n"
@@ -158,19 +159,21 @@ def main():
             s_boot_ptt_on = !s_boot_ptt_on;
             if (s_boot_ptt_on) {
                 // 开始拾音：ManualStop 模式，不会自动结束；静默喇叭
+                // 用长时限兜底（120 秒），避免一直说下去静默中途失效；
+                // 按停止时会立刻改成一个更短的时限。
                 pc_ptt_grace_disarm();   // 连按两次时，取消上一轮残留的宽限期
                 g_ptt_active = true;
-                g_pc_mute = true;
+                pc_mute_hold(120000);
                 ESP_LOGI("PTT", "PC_PTT_BEGIN");
                 app.StartListening();
             } else {
                 // 停止拾音：发结束标记，电脑端据此合并贴入。
-                // 这里【绝不能】直接清 g_ptt_active / g_pc_mute：
-                // 云端识别结果和回复要晚 1~3 秒才回来，提前清掉就会变成
-                // "小智把要打给电脑的话当成聊天大声回答 + 顺便点评照片"。
+                // 静默继续保持 9 秒（覆盖 STT + LLM 回复 + 拍照点评），
+                // 由 pc_mute_hold 的定时器到点自动恢复，避免一直哑着。
                 app.StopListening();
                 ESP_LOGI("PTT", "PC_PTT_END");
-                pc_ptt_grace_arm(5000);  // 保持静默 5 秒，期间照收文字、不出声
+                pc_ptt_grace_arm(6000);   // 6 秒后撤掉 g_ptt_active
+                pc_mute_hold(9000);       // 9 秒静默
             }
             // === PTT 补丁：结束（原 ToggleChatState 逻辑已被本补丁取代）===
         });'''
