@@ -54,9 +54,40 @@ def main():
     if inc_anchor not in src:
         print("[错误] 找不到 TAG 锚点")
         sys.exit(1)
+    mute_block = '''
+
+// === PC 静默转发：全局喇叭静默开关（esp32_camera.cc 用 extern 引用）===
+volatile bool g_pc_mute = false;
+
+// 静默保持：所有打开静默的地方都必须走 pc_mute_hold()，由定时器兜底关闭。
+// 原因：拍照点评、云端回复都比触发点晚很多秒，写死成"永不恢复"会一直哑着；
+// 而当场清掉又会让小智把要打给电脑的话念出来。定时器是唯一能两头兼顾的做法。
+// esp32_camera.cc 与板型 BOOT 回调通过 extern void pc_mute_hold(uint32_t) 调用。
+static esp_timer_handle_t s_pc_mute_timer = nullptr;
+static void pc_mute_timer_cb(void*) {
+    g_pc_mute = false;
+    ESP_LOGI(TAG, "PC_MUTE_HOLD_END");
+}
+void pc_mute_hold(uint32_t ms) {
+    g_pc_mute = true;
+    if (s_pc_mute_timer == nullptr) {
+        esp_timer_create_args_t mute_args = {};
+        mute_args.callback = pc_mute_timer_cb;
+        mute_args.arg = nullptr;
+        mute_args.dispatch_method = ESP_TIMER_TASK;
+        mute_args.name = "pc_mute_hold";
+        if (esp_timer_create(&mute_args, &s_pc_mute_timer) != ESP_OK) {
+            s_pc_mute_timer = nullptr;
+            return;
+        }
+    } else {
+        esp_timer_stop(s_pc_mute_timer);
+    }
+    esp_timer_start_once(s_pc_mute_timer, (uint64_t)ms * 1000ULL);
+}
+// === 补丁 ==='''
     src = src.replace(inc_anchor,
-                      inc_anchor + '\n\n// === PC 静默转发：全局喇叭静默开关（esp32_camera.cc 用 extern 引用）===\n'
-                      'volatile bool g_pc_mute = false;\n// === 补丁 ===', 1)
+                      '#include <esp_timer.h>\n' + inc_anchor + mute_block, 1)
 
     # --- 2) 音频回调：静默时丢弃音频 ---
     audio_anchor = '''    protocol_->OnIncomingAudio([this](std::unique_ptr<AudioStreamPacket> packet) {
@@ -92,7 +123,7 @@ def main():
                     }}
                     if (pc_match) {{
                         // 给电脑的句子：静默喇叭 + 打断回复；文字已通过上面的 >> 行发到串口
-                        g_pc_mute = true;
+                        pc_mute_hold(9000);
                         ESP_LOGI(TAG, ">> PC_SILENCE_ABORT");
                         Schedule([this]() {{ AbortSpeaking(kAbortReasonNone); }});
                     }} else {{
