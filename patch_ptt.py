@@ -98,7 +98,8 @@ def main():
             + "\n\n// === PTT 补丁：引用 application.cc 的全局标志 ===\n"
             + "#include <esp_timer.h>\n"
             + "extern volatile bool g_ptt_active;\nextern volatile bool g_pc_mute;\n"
-            + "extern void pc_mute_hold(uint32_t ms);  // application.cc 定义，定时器兜底关静默\n"
+            + "extern void pc_mute_hold(uint32_t ms);  // 只延长不缩短，application.cc 定义\n"
+            + "extern void pc_mute_set(uint32_t ms);   // 强制设定，可缩短\n"
             + "static bool s_boot_ptt_on = false;\n"
             + "\n"
             + "// 第二下 BOOT 之后只负责撤掉 g_ptt_active（让后续对话恢复正常判断）。\n"
@@ -163,7 +164,7 @@ def main():
                 // 按停止时会立刻改成一个更短的时限。
                 pc_ptt_grace_disarm();   // 连按两次时，取消上一轮残留的宽限期
                 g_ptt_active = true;
-                pc_mute_hold(120000);
+                pc_mute_set(120000);
                 ESP_LOGI("PTT", "PC_PTT_BEGIN");
                 app.StartListening();
             } else {
@@ -173,7 +174,7 @@ def main():
                 app.StopListening();
                 ESP_LOGI("PTT", "PC_PTT_END");
                 pc_ptt_grace_arm(6000);   // 6 秒后撤掉 g_ptt_active
-                pc_mute_hold(9000);       // 9 秒静默
+                pc_mute_set(9000);        // 9 秒静默（强制缩短，覆盖上面的 120 秒）
             }
             // === PTT 补丁：结束（原 ToggleChatState 逻辑已被本补丁取代）===
         });'''
