@@ -20,6 +20,9 @@
 
 // 拍照后让小智静默：引用 application.cc 定义的全局开关
 extern volatile bool g_pc_mute;
+// 带定时器的静默：拍照点评要十几秒才播完，必须在 application.cc 里用
+// 一次性定时器兜底关闭，否则会一直哑着。
+extern void pc_mute_hold(uint32_t ms);
 
 // ===== [PC-PHOTO] 自定义：把拍到的 JPEG 通过串口发给电脑 =====
 // 电脑端脚本识别帧标记，解码 base64 后把原图贴进 WorkBuddy。
@@ -27,8 +30,8 @@ extern volatile bool g_pc_mute;
 static void pc_photo_dump_jpeg(const uint8_t* data, size_t len) {
     if (data == nullptr || len == 0) return;
 
-    // 拍照传电脑：打开喇叭静默，避免小智评论照片
-    g_pc_mute = true;
+    // 拍照传电脑：打开喇叭静默 20 秒，够 LLM 生成点评 + 播完，避免小智念照片
+    pc_mute_hold(20000);
 
     // base64 输出长度 = 4 * ceil(len/3)，另加结尾 null。
     // 直接按上限分配，不用探测调用（探测调用会返回 BUFFER_TOO_SMALL，
