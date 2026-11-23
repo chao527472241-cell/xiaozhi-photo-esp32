@@ -59,31 +59,63 @@ def main():
 // === PC 静默转发：全局喇叭静默开关（esp32_camera.cc 用 extern 引用）===
 volatile bool g_pc_mute = false;
 
-// 静默保持：所有打开静默的地方都必须走 pc_mute_hold()，由定时器兜底关闭。
-// 原因：拍照点评、云端回复都比触发点晚很多秒，写死成"永不恢复"会一直哑着；
-// 而当场清掉又会让小智把要打给电脑的话念出来。定时器是唯一能两头兼顾的做法。
-// esp32_camera.cc 与板型 BOOT 回调通过 extern void pc_mute_hold(uint32_t) 调用。
+// 静默保持：所有打开静默的地方都必须走 pc_mute_hold / pc_mute_set，
+// 由定时器兜底关闭。原因：拍照点评、云端回复都比触发点晚很多秒，
+// 写死成"永不恢复"会一直哑着；而当场清掉又会让小智把要打给电脑的话念出来。
+//
+// pc_mute_hold()：只延长不缩短。云端常把一句话拆成两条「迟到」的 stt，
+//   每条都会走一次 hold(9000)；若不比较截止时间，就会把拍照刚设的 25 秒
+//   压回 9 秒，点评正好在剩余时间里漏出来（实测踩过）。
+// pc_mute_set()：强制设定，可缩短。BOOT 停止时用它把"开始听"的 120 秒改成 9 秒。
 static esp_timer_handle_t s_pc_mute_timer = nullptr;
+static int64_t s_pc_mute_deadline = 0;
+
 static void pc_mute_timer_cb(void*) {
     g_pc_mute = false;
+    s_pc_mute_deadline = 0;
     ESP_LOGI(TAG, "PC_MUTE_HOLD_END");
 }
-void pc_mute_hold(uint32_t ms) {
-    g_pc_mute = true;
-    if (s_pc_mute_timer == nullptr) {
-        esp_timer_create_args_t mute_args = {};
-        mute_args.callback = pc_mute_timer_cb;
-        mute_args.arg = nullptr;
-        mute_args.dispatch_method = ESP_TIMER_TASK;
-        mute_args.name = "pc_mute_hold";
-        if (esp_timer_create(&mute_args, &s_pc_mute_timer) != ESP_OK) {
-            s_pc_mute_timer = nullptr;
-            return;
-        }
-    } else {
-        esp_timer_stop(s_pc_mute_timer);
+
+static bool pc_mute_ensure_timer() {
+    if (s_pc_mute_timer != nullptr) {
+        return true;
     }
+    esp_timer_create_args_t mute_args = {};
+    mute_args.callback = pc_mute_timer_cb;
+    mute_args.arg = nullptr;
+    mute_args.dispatch_method = ESP_TIMER_TASK;
+    mute_args.name = "pc_mute_hold";
+    if (esp_timer_create(&mute_args, &s_pc_mute_timer) != ESP_OK) {
+        // 定时器建不起来就别静默，否则会永久哑掉
+        s_pc_mute_timer = nullptr;
+        g_pc_mute = false;
+        return false;
+    }
+    return true;
+}
+
+void pc_mute_hold(uint32_t ms) {
+    int64_t want = esp_timer_get_time() + (int64_t)ms * 1000;
+    if (g_pc_mute && s_pc_mute_timer != nullptr && want <= s_pc_mute_deadline) {
+        return;  // 已有更长的静默在生效，不要缩短
+    }
+    if (!pc_mute_ensure_timer()) {
+        return;
+    }
+    g_pc_mute = true;
+    esp_timer_stop(s_pc_mute_timer);
     esp_timer_start_once(s_pc_mute_timer, (uint64_t)ms * 1000ULL);
+    s_pc_mute_deadline = want;
+}
+
+void pc_mute_set(uint32_t ms) {
+    if (!pc_mute_ensure_timer()) {
+        return;
+    }
+    g_pc_mute = true;
+    esp_timer_stop(s_pc_mute_timer);
+    esp_timer_start_once(s_pc_mute_timer, (uint64_t)ms * 1000ULL);
+    s_pc_mute_deadline = esp_timer_get_time() + (int64_t)ms * 1000;
 }
 // === 补丁 ==='''
     src = src.replace(inc_anchor,
@@ -127,8 +159,11 @@ void pc_mute_hold(uint32_t ms) {
                         ESP_LOGI(TAG, ">> PC_SILENCE_ABORT");
                         Schedule([this]() {{ AbortSpeaking(kAbortReasonNone); }});
                     }} else {{
-                        // 普通对话：恢复声音
-                        g_pc_mute = false;
+                        // 普通对话：这里绝对不能把静默关掉。
+                        // 云端常把一句话拆成两条「迟到」的 stt 下发；若在此处无条件
+                        // g_pc_mute = false，拍照那 20 多秒静默会被它中途关掉，
+                        // 结果就是照片传出来了、小智紧接着开始点评照片（实测踩过）。
+                        // 恢复声音统一交给 pc_mute_hold() 的定时器到期。
                     }}
                 }}
                 // === 补丁结束 ==='''
