@@ -161,7 +161,7 @@ static void pc_apply_theme() {
 
 static void pc_btn_event_cb(lv_event_t* e) {
     if (lv_event_get_code(e) != LV_EVENT_CLICKED) return;
-    lv_obj_t* tgt = lv_event_get_target(e);
+    lv_obj_t* tgt = (lv_obj_t*)lv_event_get_target(e);
     if (tgt == s_pc_btn_page) {
         s_pc_page = (s_pc_page + 1) % 3;
         s_pc_last_emoji_ms = 0;
@@ -234,9 +234,9 @@ static void pc_timer_cb(lv_timer_t* /*timer*/) {
             n += snprintf(buf + n, sizeof(buf) - n, "内存   %u KB 空闲\n", (unsigned)free_kb);
         }
         if (PC_SHOW_UPTIME) {
-            uint32_t sec = (uint32_t)(esp_timer_get_time() / 1000000);
+            uint64_t sec = (uint64_t)(esp_timer_get_time() / 1000000);
             n += snprintf(buf + n, sizeof(buf) - n, "运行   %02u:%02u:%02u\n",
-                          sec / 3600, (sec % 3600) / 60, sec % 60);
+                          (unsigned)(sec / 3600), (unsigned)((sec % 3600) / 60), (unsigned)(sec % 60));
         }
         if (PC_SHOW_STATE) {
             auto st = Application::GetInstance().GetDeviceState();
