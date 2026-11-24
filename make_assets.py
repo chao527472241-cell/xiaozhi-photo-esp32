@@ -4,7 +4,7 @@
 ================================================================
 产出 pc_assets.h，里面是纯字节数组：
   1) 壁纸 320x240  RGB565        （有 wallpaper.jpg 就用它，没有就用内置画的渐变山景）
-  2) 4 个磁贴图标 48x48 RGB565A8 （麦克风/时钟/状态条/齿轮）
+  2) 5 个磁贴图标 48x48 RGB565A8 （麦克风/时钟/状态条/齿轮/显示器）
   3) 11 个字符 30x46 RGB565A8    （0-9 加冒号，用来拼大号时钟）
 
 用法：
@@ -27,7 +27,8 @@ WALLPAPER = os.path.join(HERE, "wallpaper.jpg")
 MOCK = os.path.join(HERE, "_mock_home.png")
 
 W, H = 320, 240          # 屏幕分辨率
-ICON_W = ICON_H = 48     # 图标尺寸
+ICON_W = ICON_H = 48     # 图标绘制坐标系（先按 48 画，超采样，边缘才干净）
+ICON_OUT = 34            # 实际输出尺寸：磁贴只有 60 高，图标必须缩小
 DIGIT_W, DIGIT_H = 30, 46  # 单个字符格子
 SS = 4                   # 画图标/文字时的超采样倍数（先画大再缩小，边缘才干净）
 
@@ -204,6 +205,22 @@ def icon_gear():
     return img
 
 
+def icon_pc():
+    """显示器 + 两条数据线，代表「电脑运行信息」"""
+    img = _canvas(); d = ImageDraw.Draw(img)
+    c = (199, 146, 234, 255)
+    # 屏幕外框
+    d.rounded_rectangle([_S(6), _S(9), _S(42), _S(31)], radius=_S(3),
+                        outline=c, width=_S(2.6))
+    # 屏幕里的两行「数据」
+    d.line([_S(13), _S(17), _S(23), _S(17)], fill=c, width=_S(2.2))
+    d.line([_S(13), _S(23), _S(35), _S(23)], fill=c, width=_S(2.2))
+    # 支架
+    d.line([_S(24), _S(31), _S(24), _S(37)], fill=c, width=_S(2.6))
+    d.line([_S(15), _S(39), _S(33), _S(39)], fill=c, width=_S(2.6))
+    return img
+
+
 # ---------------------------------------------------------------- 数字
 
 FONT_CANDIDATES = [
@@ -289,28 +306,27 @@ def build_mock(wall, icons, glyphs):
     d = ImageDraw.Draw(m)
 
     # 品牌字
-    d.text((10, 6), "小智", font=load_font(15, cjk=True), fill=(255, 255, 255, 235))
+    d.text((10, 4), "小智", font=load_font(15, cjk=True), fill=(255, 255, 255, 235))
 
-    tiles = [("小智AI", 0, (89, 167, 255)), ("时钟", 1, (56, 214, 224)),
-             ("状态", 2, (74, 222, 128)), ("设置", 3, (255, 176, 32))]
-    for i, (label, ii, accent) in enumerate(tiles):
-        col, row = i % 2, i // 2
-        x = 8 + col * 152
-        y = 30 + row * 94
-        tw, th = 144, 86
-        d.rounded_rectangle([x, y, x + tw, y + th], radius=14,
+    # 5 个磁贴：2 列 × 3 行，最后一行「设置」横跨两列
+    tiles = [
+        ("小智AI", 0, (89, 167, 255), 6, 28, 150),
+        ("时钟",   1, (56, 214, 224), 164, 28, 150),
+        ("状态",   2, (74, 222, 128), 6, 92, 150),
+        ("电脑",   4, (199, 146, 234), 164, 92, 150),
+        ("设置",   3, (255, 176, 32), 6, 156, 308),
+    ]
+    for label, ii, accent, x, y, tw in tiles:
+        th = 60
+        d.rounded_rectangle([x, y, x + tw, y + th], radius=13,
                             fill=(20, 26, 38, 235), outline=accent + (255,), width=2)
-        ic = icons[ii].resize((44, 44), Image.LANCZOS)
-        m.alpha_composite(ic, (x + (tw - 44) // 2, y + 8))
-        bb = d.textbbox((0, 0), label, font=load_font(16, cjk=True))
-        d.text((x + (tw - (bb[2] - bb[0])) / 2, y + 56), label,
-               font=load_font(16, cjk=True), fill=(236, 240, 248, 255))
+        ic = icons[ii].resize((34, 34), Image.LANCZOS)
+        m.alpha_composite(ic, (x + (tw - 34) // 2, y + 3))
+        f = load_font(15, cjk=True)
+        bb = d.textbbox((0, 0), label, font=f)
+        d.text((x + (tw - (bb[2] - bb[0])) / 2, y + 39), label, font=f,
+               fill=(236, 240, 248, 255))
 
-    # 页面小圆点
-    for i in range(3):
-        cx = W // 2 - 14 + i * 14
-        d.ellipse([cx - 3, 229, cx + 3, 235],
-                  fill=(255, 255, 255, 255) if i == 0 else (255, 255, 255, 90))
     m.convert("RGB").save(MOCK)
     print("[预览] 已生成界面模拟图：" + MOCK)
 
@@ -352,16 +368,36 @@ def build_mock(wall, icons, glyphs):
                  font=load_font(15, cjk=True), fill=(120, 200, 255, 255))
         y += 46
     st.convert("RGB").save(os.path.join(HERE, "_mock_settings.png"))
-    print("[预览] 另存时钟页/设置页样张")
+
+    # ---- 电脑页样张 ----
+    p = wall.copy().convert("RGBA")
+    p = Image.alpha_composite(p, Image.new("RGBA", (W, H), (4, 6, 12, 150)))
+    dp = ImageDraw.Draw(p)
+    dp.text((14, 8), "‹  电脑", font=load_font(17, cjk=True), fill=(255, 255, 255, 245))
+    rows = [("CPU", "23%  3.6GHz"), ("内存", "61%  9.8/16G"),
+            ("磁盘", "C 45%  D 72%"), ("网络", "↓1.2M ↑0.3M"),
+            ("CPU 温度", "56°C"), ("芯片温度", "42°C")]
+    y = 36
+    for name, val in rows:
+        dp.rounded_rectangle([10, y, W - 10, y + 30], radius=8, fill=(22, 28, 40, 225),
+                             outline=(90, 110, 140, 100), width=1)
+        dp.text((20, y + 6), name, font=load_font(14, cjk=True), fill=(200, 210, 225, 255))
+        fv = load_font(15, cjk=True)
+        bb = dp.textbbox((0, 0), val, font=fv)
+        dp.text((W - 20 - (bb[2] - bb[0]), y + 5), val, font=fv, fill=(120, 200, 255, 255))
+        y += 32
+    p.convert("RGB").save(os.path.join(HERE, "_mock_pc.png"))
+    print("[预览] 另存时钟页/设置页/电脑页样张")
 
 
 # ---------------------------------------------------------------- 主流程
 
 def main():
     wallpaper = make_wallpaper()
-    # 超采样画完再缩回目标尺寸（边缘才干净）
-    icons = [i.resize((ICON_W, ICON_H), Image.LANCZOS)
-             for i in (icon_mic(), icon_clock(), icon_bars(), icon_gear())]
+    # 超采样画完再缩回目标尺寸（边缘才干净）。
+    # 图标按 48 画、输出 34：磁贴只有 60 高，放不下 48 的图。
+    icons = [i.resize((ICON_OUT, ICON_OUT), Image.LANCZOS)
+             for i in (icon_mic(), icon_clock(), icon_bars(), icon_gear(), icon_pc())]
     glyphs = [g.resize((DIGIT_W, DIGIT_H), Image.LANCZOS)
               for g in ([_glyph(c) for c in "0123456789"] + [_glyph(":")])]
 
@@ -373,8 +409,8 @@ def main():
     lines.append("#define PC_ASSETS_OK 1")
     lines.append("#define PC_WALLPAPER_W %d" % W)
     lines.append("#define PC_WALLPAPER_H %d" % H)
-    lines.append("#define PC_ICON_W %d" % ICON_W)
-    lines.append("#define PC_ICON_H %d" % ICON_H)
+    lines.append("#define PC_ICON_W %d" % ICON_OUT)
+    lines.append("#define PC_ICON_H %d" % ICON_OUT)
     lines.append("#define PC_DIGIT_W %d" % DIGIT_W)
     lines.append("#define PC_DIGIT_H %d" % DIGIT_H)
     lines.append("#define PC_DIGIT_COUNT %d" % len(glyphs))
