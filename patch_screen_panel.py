@@ -179,7 +179,7 @@ void QmiTask(void*) {
                 tilt = acosf(c) * 57.2958f;
             }
             if (was_quiet && tilt > 18.0f && now - last_pickup > 2000000) {
-                g_qmi_pickup++;
+                g_qmi_pickup = (int)g_qmi_pickup + 1;   // volatile 不能用 ++（C++20 已弃用）
                 last_pickup = now;
             }
             still_ctr = 0;
@@ -190,7 +190,7 @@ void QmiTask(void*) {
         if (dm > 0.35f) {
             if (now - shake_win > 600000) { shake_win = now; shake_hits = 0; }
             if (++shake_hits >= 4 && now - last_shake > 1500000) {
-                g_qmi_shake++;
+                g_qmi_shake = (int)g_qmi_shake + 1;
                 last_shake = now;
                 shake_hits = 0;
             }
