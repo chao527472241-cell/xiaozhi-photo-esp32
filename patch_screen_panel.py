@@ -20,9 +20,11 @@ import os
 import sys
 
 LCD = "main/display/lcd_display.cc"
+BOARD_CC = "main/boards/lckfb/szpi-esp32s3/lichuang_dev_board.cc"
 ASSETS_CANDIDATES = ["main/display/pc_assets.h", "pc_assets.h"]
 CONFIG = "screen_config.txt"
 MARK = "PC_SCREEN_PANEL_PATCH"
+IMU_MARK = "QMI8658_IMU_PATCH"   # 板载六轴采集任务（注入板级 .cc）
 
 
 def load_config():
@@ -36,6 +38,8 @@ def load_config():
         "show_uptime": "1",
         "show_state": "1",
         "wallpaper": "1",
+        "imu": "1",
+        "dim": "30",
     }
     if not os.path.exists(CONFIG):
         print("[提示] 没找到 %s，使用默认设置" % CONFIG)
@@ -63,6 +67,190 @@ def flag(v):
     return "true" if v in ("1", "on", "true", "yes", "y", "开", "是") else "false"
 
 
+# ======================================================================
+# 板载六轴（QMI8658）采集任务 —— 注入到板级文件 lichuang_dev_board.cc
+# ======================================================================
+# 为什么不在界面代码里直接开 I2C：
+#   I2C 口（SDA=GPIO1 / SCL=GPIO2）已经被板级对象用 i2c_master 占用了（音频/触摸/
+#   IO 扩展/摄像头都在上面）。同一端口重复 i2c_new_master_bus 会失败，所以采集放
+#   在板级文件里复用现成句柄 i2c_bus_，结果用全局变量抛给界面层。
+IMU_CODE = r'''
+// === QMI8658_IMU_PATCH ===
+// 板载六轴 QMI8658：与音频/触摸/IO 扩展共用同一条 I2C（SDA=GPIO1, SCL=GPIO2，
+// 地址 0x6A 或 0x6B）。采集放这里，界面层只读全局变量：
+//   g_qmi_acc       最近一次加速度（g）
+//   g_qmi_ok        1 = 传感器正常
+//   g_qmi_pickup    拿起次数（先安静 1 秒，再倾斜 18° 以上才算）
+//   g_qmi_shake     摇一摇次数（600ms 内 4 次大抖动）
+//   g_qmi_face_down 1 = 屏幕朝下（按上电姿态判方向，不写死 +Z，兼容模组倒装）
+#include <math.h>
+#include <string.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/task.h>
+#include "esp_log.h"
+#include "esp_timer.h"
+#include "driver/i2c_master.h"
+
+extern "C" {
+volatile float g_qmi_acc[3] = {0.0f, 0.0f, 1.0f};
+volatile int   g_qmi_ok = 0;
+volatile int   g_qmi_pickup = 0;
+volatile int   g_qmi_shake = 0;
+volatile int   g_qmi_face_down = 0;
+}
+
+namespace {
+
+constexpr const char* QMI_TAG = "QMI8658";
+constexpr uint8_t kRegWhoAmI = 0x00;
+constexpr uint8_t kRegCtrl1  = 0x02;
+constexpr uint8_t kRegCtrl2  = 0x03;
+constexpr uint8_t kRegCtrl7  = 0x08;
+constexpr uint8_t kRegAccX   = 0x35;
+constexpr float   kLsbPerG   = 8192.0f;   // ±4g 档：32768 / 4
+
+i2c_master_dev_handle_t s_qmi_dev = nullptr;
+
+bool QmiWrite(uint8_t reg, uint8_t val) {
+    uint8_t buf[2] = {reg, val};
+    return i2c_master_transmit(s_qmi_dev, buf, 2, 100) == ESP_OK;
+}
+
+bool QmiRead(uint8_t reg, uint8_t* out, size_t len) {
+    return i2c_master_transmit_receive(s_qmi_dev, &reg, 1, out, len, 100) == ESP_OK;
+}
+
+void QmiTask(void*) {
+    uint8_t buf[6];
+    float px = 0, py = 0, pz = 0;
+    float rest[3] = {0, 0, 1};    // 静止参考姿态：用它算「倾斜了多少度」
+    bool  have_rest = false;
+    bool  was_quiet = false;      // 动之前的 1 秒内是否安静过
+    int   still_ctr = 0;
+    int   fail_ctr = 0;
+    int64_t last_pickup = 0, last_shake = 0, shake_win = 0;
+    int   shake_hits = 0;
+    int   face_ctr = 0;
+    float az_ref = 0.0f;          // 上电时「朝上」的 Z 分量（兼容模组倒装）
+
+    for (;;) {
+        vTaskDelay(pdMS_TO_TICKS(20));
+        if (s_qmi_dev == nullptr) continue;
+        if (!QmiRead(kRegAccX, buf, 6)) {
+            if (++fail_ctr == 20) ESP_LOGW(QMI_TAG, "acc read failing, keep retrying");
+            continue;
+        }
+        fail_ctr = 0;
+        float ax = (float)(int16_t)((buf[1] << 8) | buf[0]) / kLsbPerG;
+        float ay = (float)(int16_t)((buf[3] << 8) | buf[2]) / kLsbPerG;
+        float az = (float)(int16_t)((buf[5] << 8) | buf[4]) / kLsbPerG;
+        g_qmi_acc[0] = ax; g_qmi_acc[1] = ay; g_qmi_acc[2] = az;
+
+        float dx = ax - px, dy = ay - py, dz = az - pz;
+        px = ax; py = ay; pz = az;
+        float dm  = sqrtf(dx * dx + dy * dy + dz * dz);   // 20ms 内的变化量
+        float mag = sqrtf(ax * ax + ay * ay + az * az);
+        float dev = fabsf(mag - 1.0f);
+        bool  quiet = (dm < 0.03f && dev < 0.12f);
+        int64_t now = esp_timer_get_time();
+
+        if (az_ref == 0.0f && quiet && fabsf(az) > 0.6f) az_ref = az;
+        if (!have_rest) { rest[0] = ax; rest[1] = ay; rest[2] = az; have_rest = true; }
+
+        if (quiet) {
+            if (++still_ctr > 50) {           // 连续安静 1 秒
+                was_quiet = true;
+                // 静止时把参考姿态慢慢挪过来：换个地方摆、慢慢漂移都能自适应
+                rest[0] = rest[0] * 0.97f + ax * 0.03f;
+                rest[1] = rest[1] * 0.97f + ay * 0.03f;
+                rest[2] = rest[2] * 0.97f + az * 0.03f;
+            }
+        } else {
+            // 用「姿态倾斜角」判断拿起，而不是用加速度大小：
+            // 慢慢拿起来时合加速度一直≈1g，靠大小根本测不到，倾斜 20 度就很明显。
+            float dot = rest[0] * ax + rest[1] * ay + rest[2] * az;
+            float nl  = sqrtf(ax * ax + ay * ay + az * az);
+            float rl  = sqrtf(rest[0] * rest[0] + rest[1] * rest[1] + rest[2] * rest[2]);
+            float tilt = 0.0f;
+            if (nl > 0.1f && rl > 0.1f) {
+                float c = dot / (nl * rl);
+                if (c >  1.0f) c =  1.0f;
+                if (c < -1.0f) c = -1.0f;
+                tilt = acosf(c) * 57.2958f;
+            }
+            if (was_quiet && tilt > 18.0f && now - last_pickup > 2000000) {
+                g_qmi_pickup++;
+                last_pickup = now;
+            }
+            still_ctr = 0;
+            was_quiet = false;
+        }
+
+        // 摇一摇：600ms 内 4 次以上剧烈抖动
+        if (dm > 0.35f) {
+            if (now - shake_win > 600000) { shake_win = now; shake_hits = 0; }
+            if (++shake_hits >= 4 && now - last_shake > 1500000) {
+                g_qmi_shake++;
+                last_shake = now;
+                shake_hits = 0;
+            }
+        }
+
+        bool face_down = (az_ref != 0.0f) && ((az * az_ref) < -0.60f * fabsf(az_ref));
+        if (face_down) { if (face_ctr < 60) face_ctr++; }
+        else           { face_ctr = 0; }
+        g_qmi_face_down = (face_ctr > 40) ? 1 : 0;
+    }
+}
+
+}  // namespace
+
+void qmi8658_start(i2c_master_bus_handle_t bus) {
+    if (bus == nullptr || s_qmi_dev != nullptr) return;
+
+    uint8_t addr = 0x6A;
+    if (i2c_master_probe(bus, 0x6A, 100) != ESP_OK) {
+        if (i2c_master_probe(bus, 0x6B, 100) != ESP_OK) {
+            ESP_LOGW(QMI_TAG, "qmi8658 not found on 0x6a/0x6b, imu disabled");
+            return;
+        }
+        addr = 0x6B;
+    }
+
+    i2c_device_config_t cfg = {};
+    cfg.dev_addr_length = I2C_ADDR_BIT_LEN_7;
+    cfg.device_address  = addr;
+    cfg.scl_speed_hz    = 400 * 1000;
+    if (i2c_master_bus_add_device(bus, &cfg, &s_qmi_dev) != ESP_OK) {
+        ESP_LOGW(QMI_TAG, "add_device failed, imu disabled");
+        return;
+    }
+
+    uint8_t who = 0;
+    QmiRead(kRegWhoAmI, &who, 1);
+    QmiWrite(kRegCtrl1, 0x40);   // 寄存器地址自增 + 小端
+    QmiWrite(kRegCtrl2, 0x14);   // ±4g / 250Hz
+    QmiWrite(kRegCtrl7, 0x01);   // 只开加速度计（陀螺仪不启用，省电）
+    vTaskDelay(pdMS_TO_TICKS(30));
+
+    uint8_t chk[6] = {0};
+    if (!QmiRead(kRegAccX, chk, 6)) {
+        ESP_LOGW(QMI_TAG, "probe ok but acc read failed, imu disabled");
+        return;
+    }
+    float cx = (float)(int16_t)((chk[1] << 8) | chk[0]) / kLsbPerG;
+    float cy = (float)(int16_t)((chk[3] << 8) | chk[2]) / kLsbPerG;
+    float cz = (float)(int16_t)((chk[5] << 8) | chk[4]) / kLsbPerG;
+
+    g_qmi_ok = 1;
+    BaseType_t ok = xTaskCreate(QmiTask, "qmi8658", 3072, nullptr, 3, nullptr);
+    ESP_LOGI(QMI_TAG, "imu %s addr=0x%02x whoami=0x%02x acc=%.2f/%.2f/%.2f",
+             ok == pdPASS ? "ready" : "task failed", addr, who, cx, cy, cz);
+}
+// === QMI8658_IMU_PATCH END ===
+'''
+
+
 TEMPLATE = r'''
 // === __MARK__：触摸界面（磁贴桌面/时钟/状态/电脑/设置）===
 #include "pc_assets.h"
@@ -81,6 +269,8 @@ TEMPLATE = r'''
 #include "driver/temperature_sensor.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "board.h"
+#include "audio_codec.h"
 
 // --- 由电脑端 screen_config.txt 生成 ---
 static const char* PC_SLOGAN      = __SLOGAN__;
@@ -92,6 +282,8 @@ static const bool  PC_SHOW_STATE  = __SHOW_STATE__;
 static const bool  PC_USE_WALL    = __WALL__;
 static const bool  PC_DEFAULT_DARK = __DARK__;
 static const int   PC_BOOT_PAGE    = __BOOT__;
+static const bool  PC_IMU          = __IMU__;      // 六轴手势开关
+static const int   PC_DIM_SEC      = __DIM__;      // 多久没动静熄背光（秒，0=不熄）
 
 // --- 对象 ---
 static lv_obj_t* s_pc_root = nullptr;
@@ -129,6 +321,25 @@ static int  s_pc_last_digit[5] = {-1, -1, -1, -1, -1};
 static bool s_pc_assets_ready = false;
 static bool s_pc_io_ready = false;
 static int64_t s_pc_last_pc_us = 0;
+
+// 六轴手势：数据由板级 QMI8658 采集任务写入（见 lichuang_dev_board.cc）
+extern "C" {
+extern volatile float g_qmi_acc[3];
+extern volatile int   g_qmi_ok;
+extern volatile int   g_qmi_pickup;
+extern volatile int   g_qmi_shake;
+extern volatile int   g_qmi_face_down;
+}
+
+static int  s_pc_imu_pickup_seen = 0;
+static int  s_pc_imu_shake_seen = 0;
+static bool s_pc_dimmed = false;          // 背光已关
+static bool s_pc_muted = false;           // 屏幕朝下静音中
+static int  s_pc_vol_saved = 70;
+static int  s_pc_bright_saved = 75;       // 熄屏前的背光亮度
+static int64_t s_pc_act_us = 0;           // 最后一次用户动作（触摸/拿起/摇）
+
+static void pc_wake();
 
 // 电脑端经串口下发的主机信息
 static volatile float s_pc_cpu = -1;
@@ -239,6 +450,7 @@ static void pc_apply_palette() {
 
 static void pc_action_cb(lv_event_t* e) {
     if (lv_event_get_code(e) != LV_EVENT_CLICKED) return;
+    if (s_pc_dimmed) { pc_wake(); return; }   // 熄屏状态下第一下只负责点亮，不触发动作
     int code = (int)(intptr_t)lv_event_get_user_data(e);
     Settings st("screen_panel", true);
     switch (code) {
@@ -268,6 +480,7 @@ static void pc_action_cb(lv_event_t* e) {
 
 static void pc_page_click_cb(lv_event_t* e) {
     if (lv_event_get_code(e) != LV_EVENT_CLICKED) return;
+    if (s_pc_dimmed) { pc_wake(); return; }
     int p = s_pc_page_idx;
     if (p == 0)      pc_show_page(1);
     else if (p == 1) pc_show_page(2);
@@ -417,6 +630,80 @@ static void pc_chip_temp_start() {
     }
 }
 
+// ---------------- 六轴手势：拿起亮屏 / 摇一摇切页 / 翻转静音 ----------------
+
+static void pc_wake() {
+    s_pc_act_us = esp_timer_get_time();
+    if (!s_pc_dimmed) return;
+    s_pc_dimmed = false;
+    Backlight* bl = Board::GetInstance().GetBacklight();
+    if (bl != nullptr) bl->SetBrightness((uint8_t)(s_pc_bright_saved > 0 ? s_pc_bright_saved : 75));
+    ESP_LOGI("ScreenPanel", "wake (brightness %d)", s_pc_bright_saved);
+}
+
+static void pc_sleep() {
+    if (s_pc_dimmed) return;
+    Backlight* bl = Board::GetInstance().GetBacklight();
+    if (bl == nullptr) return;
+    int cur = bl->brightness();
+    if (cur > 0) s_pc_bright_saved = cur;
+    s_pc_dimmed = true;
+    bl->SetBrightness(0);
+    ESP_LOGI("ScreenPanel", "dim");
+}
+
+static void pc_next_page() {
+    int p = s_pc_page_idx;
+    if      (p == 0) pc_show_page(1);
+    else if (p == 1) pc_show_page(2);
+    else if (p == 2) pc_show_page(4);
+    else             pc_show_page(0);
+}
+
+// 设置页没有「点空白翻页」回调，单独挂一个只唤醒的
+static void pc_wake_only_cb(lv_event_t* e) {
+    if (lv_event_get_code(e) == LV_EVENT_CLICKED) pc_wake();
+}
+
+static void pc_imu_poll() {
+    if (!PC_IMU) return;
+    int64_t now = esp_timer_get_time();
+
+    if (g_qmi_pickup != s_pc_imu_pickup_seen) {
+        s_pc_imu_pickup_seen = g_qmi_pickup;
+        pc_wake();
+    }
+    if (g_qmi_shake != s_pc_imu_shake_seen) {
+        s_pc_imu_shake_seen = g_qmi_shake;
+        pc_wake();
+        pc_next_page();
+    }
+
+    // 翻转静音：屏幕朝下时说话没意义，先闭嘴（翻回来恢复原音量）
+    bool fd = (g_qmi_face_down != 0);
+    AudioCodec* codec = Board::GetInstance().GetAudioCodec();
+    if (fd && !s_pc_muted) {
+        if (codec != nullptr) {
+            s_pc_vol_saved = codec->output_volume();
+            codec->SetOutputVolume(0);
+        }
+        s_pc_muted = true;
+    } else if (!fd && s_pc_muted) {
+        if (codec != nullptr) codec->SetOutputVolume(s_pc_vol_saved > 0 ? s_pc_vol_saved : 70);
+        s_pc_muted = false;
+    }
+
+    // 安静一段时间就关背光。只在待机时熄，说话/聆听时保持亮着（熄着的话立刻点亮）。
+    bool idle = (Application::GetInstance().GetDeviceState() == kDeviceStateIdle);
+    if (!idle) {
+        if (s_pc_dimmed) pc_wake();
+        s_pc_act_us = now;
+    } else if (!s_pc_dimmed && PC_DIM_SEC > 0 &&
+               now - s_pc_act_us > (int64_t)PC_DIM_SEC * 1000000LL) {
+        pc_sleep();
+    }
+}
+
 // ---------------- 电脑页刷新 ----------------
 
 static void pc_fmt_net(char* out, size_t n, float kb) {
@@ -476,6 +763,7 @@ static void pc_refresh_pc_page() {
 }
 
 static void pc_timer_cb(lv_timer_t* /*t*/) {
+    pc_imu_poll();   // 手势常驻：面板隐藏/熄屏时也要能靠拿起、摇晃叫醒
     if (s_pc_root == nullptr) return;
 
     bool idle = (Application::GetInstance().GetDeviceState() == kDeviceStateIdle);
@@ -563,6 +851,8 @@ static void pc_build_ui(lv_obj_t* screen) {
         // 设置页有自己的返回按钮，不参与"点空白翻页"
         if (i != 3) lv_obj_add_event_cb(s_pc_page[i], pc_page_click_cb, LV_EVENT_CLICKED, nullptr);
     }
+    // 设置页没有翻页回调，但熄屏后点空白也要能亮起来
+    lv_obj_add_event_cb(s_pc_page[3], pc_wake_only_cb, LV_EVENT_CLICKED, nullptr);
 
     // ---- 页0：磁贴桌面 ----
     lv_obj_t* brand = lv_label_create(s_pc_page[0]);
@@ -706,19 +996,62 @@ static void pc_build_ui(lv_obj_t* screen) {
     pc_show_page(s_pc_boot == 1 ? 1 : 0);
     pc_host_rx_start();
     pc_chip_temp_start();
+    s_pc_act_us = esp_timer_get_time();
+    ESP_LOGI("ScreenPanel", "gesture %s dim=%ds", PC_IMU ? "on" : "off", PC_DIM_SEC);
     lv_timer_create(pc_timer_cb, 500, nullptr);
 }
 // === __MARK__ END ===
 '''
 
 
+def patch_imu():
+    """往板级文件注入 QMI8658 采集任务，并在构造函数里启动它。"""
+    if not os.path.exists(BOARD_CC):
+        print("[警告] 找不到 %s，跳过六轴补丁" % BOARD_CC)
+        return
+
+    with open(BOARD_CC, encoding="utf-8") as f:
+        src = f.read()
+
+    if IMU_MARK in src:
+        print("[跳过] 板级文件已含六轴补丁")
+        return
+
+    anchor = "class LichuangDevBoard : public WifiBoard {"
+    if anchor not in src:
+        print("[警告] 找不到板级类定义锚点，跳过六轴补丁")
+        return
+    src = src.replace(anchor, IMU_CODE + "\n" + anchor, 1)
+
+    # 构造函数末尾启动：这时候 I2C 总线、摄像头（也用这条总线）都初始化完了
+    ctor_anchor = "        InitializeTools();\n"
+    if ctor_anchor not in src:
+        print("[警告] 找不到构造函数锚点，六轴采集不会启动")
+        return
+    src = src.replace(ctor_anchor, ctor_anchor + "        qmi8658_start(i2c_bus_);\n", 1)
+
+    with open(BOARD_CC, "w", encoding="utf-8") as f:
+        f.write(src)
+    print("[完成] 六轴补丁已注入板级文件（拿起亮屏/摇一摇切页/翻转静音）")
+
+
 def main():
     cfg = load_config()
-    print("[补丁] 界面配置: theme=%s boot=%s wallpaper=%s slogan=%s" %
-          (cfg["theme"], cfg["boot"], cfg["wallpaper"], cfg["slogan"]))
+    print("[补丁] 界面配置: theme=%s boot=%s wallpaper=%s slogan=%s imu=%s dim=%s" %
+          (cfg["theme"], cfg["boot"], cfg["wallpaper"], cfg["slogan"], cfg["imu"], cfg["dim"]))
 
     dark = "true" if cfg["theme"].strip().lower() != "light" else "false"
     boot = 1 if cfg["boot"].strip().lower() in ("clock", "时钟", "1") else 0
+    try:
+        dim_sec = int(cfg["dim"])
+    except (TypeError, ValueError):
+        dim_sec = 20
+    if dim_sec < 0:
+        dim_sec = 0
+    if dim_sec > 600:
+        dim_sec = 600
+
+    patch_imu()
 
     code = (TEMPLATE
             .replace("__MARK__", MARK)
@@ -730,6 +1063,8 @@ def main():
             .replace("__SHOW_STATE__", flag(cfg["show_state"]))
             .replace("__WALL__", flag(cfg["wallpaper"]))
             .replace("__DARK__", dark)
+            .replace("__IMU__", flag(cfg["imu"]))
+            .replace("__DIM__", str(dim_sec))
             .replace("__BOOT__", str(boot)))
 
     assets = None
