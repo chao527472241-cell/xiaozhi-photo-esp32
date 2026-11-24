@@ -64,11 +64,12 @@ def flag(v):
 
 
 TEMPLATE = r'''
-// === __MARK__：触摸界面（磁贴桌面/时钟/状态/设置）===
+// === __MARK__：触摸界面（磁贴桌面/时钟/状态/电脑/设置）===
 #include "pc_assets.h"
 #include <stdio.h>
 #include <string.h>
 #include <stdint.h>
+#include <stdlib.h>
 #include <time.h>
 #include "application.h"
 #include "settings.h"
@@ -76,6 +77,10 @@ TEMPLATE = r'''
 #include "esp_system.h"
 #include "esp_netif.h"
 #include "esp_wifi.h"
+#include "driver/uart.h"
+#include "driver/temperature_sensor.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 
 // --- 由电脑端 screen_config.txt 生成 ---
 static const char* PC_SLOGAN      = __SLOGAN__;
@@ -92,21 +97,28 @@ static const int   PC_BOOT_PAGE    = __BOOT__;
 static lv_obj_t* s_pc_root = nullptr;
 static lv_obj_t* s_pc_wall = nullptr;
 static lv_obj_t* s_pc_scrim = nullptr;
-static lv_obj_t* s_pc_page[4] = {nullptr, nullptr, nullptr, nullptr};
-static lv_obj_t* s_pc_dot[3] = {nullptr, nullptr, nullptr};
-static lv_obj_t* s_pc_tile[4] = {nullptr, nullptr, nullptr, nullptr};
-static lv_obj_t* s_pc_tile_txt[4] = {nullptr, nullptr, nullptr, nullptr};
+static lv_obj_t* s_pc_page[5] = {nullptr, nullptr, nullptr, nullptr, nullptr};
+static lv_obj_t* s_pc_tile[5] = {nullptr, nullptr, nullptr, nullptr, nullptr};
+static lv_obj_t* s_pc_tile_txt[5] = {nullptr, nullptr, nullptr, nullptr, nullptr};
 static lv_obj_t* s_pc_row[3] = {nullptr, nullptr, nullptr};
 static lv_obj_t* s_pc_row_txt[3] = {nullptr, nullptr, nullptr};
 static lv_obj_t* s_pc_row_val[3] = {nullptr, nullptr, nullptr};
 static lv_obj_t* s_pc_title = nullptr;
+static lv_obj_t* s_pc_pctitle = nullptr;
 static lv_obj_t* s_pc_clock_img[5] = {nullptr, nullptr, nullptr, nullptr, nullptr};
 static lv_obj_t* s_pc_date = nullptr;
 static lv_obj_t* s_pc_slogan_lbl = nullptr;
 static lv_obj_t* s_pc_info = nullptr;
 
+// 电脑信息页：6 行「名称 + 数值」
+#define PC_PC_ROWS 6
+static lv_obj_t* s_pc_pcrow[PC_PC_ROWS] = {nullptr};
+static lv_obj_t* s_pc_pcname[PC_PC_ROWS] = {nullptr};
+static lv_obj_t* s_pc_pcval[PC_PC_ROWS] = {nullptr};
+static lv_obj_t* s_pc_pclink = nullptr;   // 右上角「已连接 / 等待电脑」
+
 static lv_image_dsc_t s_pc_wall_dsc;
-static lv_image_dsc_t s_pc_icon_dsc[4];
+static lv_image_dsc_t s_pc_icon_dsc[5];
 static lv_image_dsc_t s_pc_digit_dsc[PC_DIGIT_COUNT];
 
 static int  s_pc_page_idx = 0;
@@ -115,10 +127,31 @@ static int  s_pc_boot = PC_BOOT_PAGE;
 static bool s_pc_manual_hide = false;
 static int  s_pc_last_digit[5] = {-1, -1, -1, -1, -1};
 static bool s_pc_assets_ready = false;
+static bool s_pc_io_ready = false;
+static int64_t s_pc_last_pc_us = 0;
 
-static const uint32_t PC_ACCENT[4] = {0x59A7FF, 0x38D6E0, 0x4ADE80, 0xFFB020};
-static const char* PC_TILE_NAME[4] = {"小智AI", "时钟", "状态", "设置"};
-static const int PC_TILE_ICON[4] = {0, 1, 2, 3};
+// 电脑端经串口下发的主机信息
+static volatile float s_pc_cpu = -1;
+static volatile float s_pc_freq = -1;
+static volatile float s_pc_mempct = -1;
+static volatile float s_pc_memu = -1;
+static volatile float s_pc_memt = -1;
+static volatile float s_pc_disk = -1;
+static volatile float s_pc_dn = -1;
+static volatile float s_pc_up = -1;
+static volatile float s_pc_ctemp = -1;
+static volatile int64_t s_pc_host_stamp = 0;   // 最近一次收到数据的时间（us）
+
+// 芯片温度（ESP32-S3 内部传感器，不是室温）
+static temperature_sensor_handle_t s_pc_tsens = nullptr;
+static bool s_pc_tsens_ok = false;
+static volatile float s_pc_chip_temp = -999;
+
+static const uint32_t PC_ACCENT[5] = {0x59A7FF, 0x38D6E0, 0x4ADE80, 0xC792EA, 0xFFB020};
+static const char* PC_TILE_NAME[5] = {"小智AI", "时钟", "状态", "电脑", "设置"};
+static const int PC_TILE_ICON[5] = {0, 1, 2, 4, 3};
+// 磁贴 → action code：4=收起面板，1/2/5=切页，3=设置页
+static const int PC_TILE_CODE[5] = {4, 1, 2, 5, 3};
 
 static void pc_make_dsc(lv_image_dsc_t* d, const uint8_t* data, uint32_t size,
                         int w, int h, int stride, lv_color_format_t cf) {
@@ -137,7 +170,7 @@ static void pc_init_assets() {
     s_pc_assets_ready = true;
     pc_make_dsc(&s_pc_wall_dsc, pc_wallpaper_map, (uint32_t)sizeof(pc_wallpaper_map),
                 PC_WALLPAPER_W, PC_WALLPAPER_H, PC_WALLPAPER_W * 2, LV_COLOR_FORMAT_RGB565);
-    for (int i = 0; i < 4; i++) {
+    for (int i = 0; i < 5; i++) {
         uint32_t one = (uint32_t)(PC_ICON_W * PC_ICON_H * 3);
         pc_make_dsc(&s_pc_icon_dsc[i], pc_icons_map + one * (uint32_t)i, one,
                     PC_ICON_W, PC_ICON_H, PC_ICON_W * 2, LV_COLOR_FORMAT_RGB565A8);
@@ -151,9 +184,9 @@ static void pc_init_assets() {
 
 static void pc_show_page(int p) {
     if (p < 0) p = 0;
-    if (p > 3) p = 3;
+    if (p > 4) p = 4;
     s_pc_page_idx = p;
-    for (int i = 0; i < 4; i++) {
+    for (int i = 0; i < 5; i++) {
         if (s_pc_page[i] == nullptr) continue;
         if (i == p) lv_obj_remove_flag(s_pc_page[i], LV_OBJ_FLAG_HIDDEN);
         else        lv_obj_add_flag(s_pc_page[i], LV_OBJ_FLAG_HIDDEN);
@@ -173,12 +206,13 @@ static void pc_apply_palette() {
     lv_color_t row  = lv_color_hex(s_pc_dark ? 0x161C28 : 0xFFFFFF);
     lv_color_t scr  = lv_color_hex(s_pc_dark ? 0x04060A : 0xFFFFFF);
     lv_color_t blue = lv_color_hex(0x59A7FF);
+    lv_color_t bd   = lv_color_hex(s_pc_dark ? 0x2A3446 : 0xDCE3EE);
 
     if (s_pc_scrim) {
         lv_obj_set_style_bg_color(s_pc_scrim, scr, 0);
         lv_obj_set_style_bg_opa(s_pc_scrim, s_pc_dark ? 120 : 90, 0);
     }
-    for (int i = 0; i < 4; i++) {
+    for (int i = 0; i < 5; i++) {
         if (s_pc_tile[i])     lv_obj_set_style_bg_color(s_pc_tile[i], tile, 0);
         if (s_pc_tile_txt[i]) lv_obj_set_style_text_color(s_pc_tile_txt[i], txt, 0);
     }
@@ -187,13 +221,20 @@ static void pc_apply_palette() {
         if (s_pc_row_txt[i]) lv_obj_set_style_text_color(s_pc_row_txt[i], txt, 0);
         if (s_pc_row_val[i]) lv_obj_set_style_text_color(s_pc_row_val[i], blue, 0);
     }
+    for (int i = 0; i < PC_PC_ROWS; i++) {
+        if (s_pc_pcrow[i]) {
+            lv_obj_set_style_bg_color(s_pc_pcrow[i], row, 0);
+            lv_obj_set_style_border_color(s_pc_pcrow[i], bd, 0);
+        }
+        if (s_pc_pcname[i]) lv_obj_set_style_text_color(s_pc_pcname[i], sub, 0);
+        if (s_pc_pcval[i])  lv_obj_set_style_text_color(s_pc_pcval[i], blue, 0);
+    }
+    if (s_pc_pctitle)    lv_obj_set_style_text_color(s_pc_pctitle, txt, 0);
+    if (s_pc_pclink)     lv_obj_set_style_text_color(s_pc_pclink, sub, 0);
     if (s_pc_title)      lv_obj_set_style_text_color(s_pc_title, txt, 0);
     if (s_pc_date)       lv_obj_set_style_text_color(s_pc_date, txt, 0);
     if (s_pc_slogan_lbl) lv_obj_set_style_text_color(s_pc_slogan_lbl, sub, 0);
     if (s_pc_info)       lv_obj_set_style_text_color(s_pc_info, txt, 0);
-    for (int i = 0; i < 3; i++) {
-        if (s_pc_dot[i]) lv_obj_set_style_bg_color(s_pc_dot[i], txt, 0);
-    }
 }
 
 static void pc_action_cb(lv_event_t* e) {
@@ -204,6 +245,7 @@ static void pc_action_cb(lv_event_t* e) {
         case 1: pc_show_page(1); break;
         case 2: pc_show_page(2); break;
         case 3: pc_show_page(3); break;
+        case 5: pc_show_page(4); break;
         case 4:
             s_pc_manual_hide = true;
             if (s_pc_root) lv_obj_add_flag(s_pc_root, LV_OBJ_FLAG_HIDDEN);
@@ -229,7 +271,8 @@ static void pc_page_click_cb(lv_event_t* e) {
     int p = s_pc_page_idx;
     if (p == 0)      pc_show_page(1);
     else if (p == 1) pc_show_page(2);
-    else if (p == 2) pc_show_page(0);
+    else if (p == 2) pc_show_page(4);
+    else if (p == 4) pc_show_page(0);
 }
 
 static const char* pc_week_name(int w) {
@@ -282,6 +325,156 @@ static void pc_refresh_info() {
     if (s_pc_info) lv_label_set_text(s_pc_info, buf);
 }
 
+// ---------------- 电脑信息：串口下行接收 ----------------
+//
+// 电脑端（serial_speech.py）每 2 秒往同一个 COM 口写一行：
+//   @PC cpu=23 freq=3.6 mempct=61 memu=9.8 memt=16 disk=45 dn=1220 up=310 ctemp=56
+// 板子这边 UART0 是全双工的，日志走 TX 不受影响，这里只读 RX。
+
+static float pc_kv(const char* s, const char* key) {
+    const char* p = strstr(s, key);
+    if (p == nullptr) return -1;
+    p += strlen(key);
+    if (*p != '=') return -1;
+    return strtof(p + 1, nullptr);
+}
+
+static void pc_parse_line(const char* line) {
+    if (strncmp(line, "@PC", 3) != 0) return;
+    s_pc_cpu    = pc_kv(line, "cpu");
+    s_pc_freq   = pc_kv(line, "freq");
+    s_pc_mempct = pc_kv(line, "mempct");
+    s_pc_memu   = pc_kv(line, "memu");
+    s_pc_memt   = pc_kv(line, "memt");
+    s_pc_disk   = pc_kv(line, "disk");
+    s_pc_dn     = pc_kv(line, "dn");
+    s_pc_up     = pc_kv(line, "up");
+    s_pc_ctemp  = pc_kv(line, "ctemp");
+    s_pc_host_stamp = esp_timer_get_time();
+}
+
+static void pc_uart_task(void* /*arg*/) {
+    static char line[192];
+    int n = 0;
+    uint8_t buf[96];
+    for (;;) {
+        int r = uart_read_bytes(UART_NUM_0, buf, sizeof(buf), pdMS_TO_TICKS(500));
+        for (int i = 0; i < r; i++) {
+            char ch = (char)buf[i];
+            if (ch == '\n' || ch == '\r') {
+                if (n > 3) {
+                    line[n] = '\0';
+                    pc_parse_line(line);
+                }
+                n = 0;
+            } else if (n < (int)sizeof(line) - 1) {
+                line[n++] = ch;
+            } else {
+                n = 0;   // 垃圾数据太长，丢掉重来
+            }
+        }
+    }
+}
+
+static void pc_host_rx_start() {
+    if (s_pc_io_ready) return;
+    s_pc_io_ready = true;
+
+    // 先按 8N1/115200 重配一遍（console 启动时已经配过，这里只是确保一致），
+    // 再装 RX 驱动。日志输出走 ROM 的直接写，不经过 driver，所以装驱动不影响打印。
+    uart_config_t cfg = {};
+    cfg.baud_rate  = 115200;
+    cfg.data_bits  = UART_DATA_8_BITS;
+    cfg.parity     = UART_PARITY_DISABLE;
+    cfg.stop_bits  = UART_STOP_BITS_1;
+    cfg.flow_ctrl  = UART_HW_FLOWCTRL_DISABLE;
+    cfg.source_clk = UART_SCLK_DEFAULT;
+    uart_param_config(UART_NUM_0, &cfg);
+
+    esp_err_t err = uart_driver_install(UART_NUM_0, 1024, 0, 0, nullptr, 0);
+    if (err != ESP_OK) {
+        ESP_LOGW("ScreenPanel", "uart0 rx install failed(0x%x)，电脑信息不可用", err);
+        return;
+    }
+    BaseType_t ok = xTaskCreate(pc_uart_task, "pc_host_rx", 4096, nullptr, 3, nullptr);
+    ESP_LOGI("ScreenPanel", "pc host rx %s (uart0 115200)",
+             ok == pdPASS ? "ready" : "task create failed");
+}
+
+// ---------------- 芯片温度 ----------------
+// ESP32-S3 片内传感器。注意它测的是芯片自身温度，比室温高 5~15 度，
+// 而且会随 CPU/WiFi 负载跳动 —— 只能当参考，不是环境温度。
+
+static void pc_chip_temp_start() {
+    temperature_sensor_config_t cfg = TEMPERATURE_SENSOR_CONFIG_DEFAULT(-10, 80);
+    if (temperature_sensor_install(&cfg, &s_pc_tsens) == ESP_OK &&
+        temperature_sensor_enable(s_pc_tsens) == ESP_OK) {
+        s_pc_tsens_ok = true;
+        ESP_LOGI("ScreenPanel", "chip temp sensor ready");
+    } else {
+        s_pc_tsens_ok = false;
+        ESP_LOGW("ScreenPanel", "chip temp sensor unavailable");
+    }
+}
+
+// ---------------- 电脑页刷新 ----------------
+
+static void pc_fmt_net(char* out, size_t n, float kb) {
+    if (kb < 0)                       snprintf(out, n, "--");
+    else if (kb >= 1024.0f)           snprintf(out, n, "%.1fM", kb / 1024.0f);
+    else                              snprintf(out, n, "%.0fK", kb);
+}
+
+static void pc_refresh_pc_page() {
+    int64_t now = esp_timer_get_time();
+    if (now - s_pc_last_pc_us < 1500000) return;   // 1.5 秒节流，别每 500ms 都读传感器
+    s_pc_last_pc_us = now;
+
+    if (s_pc_tsens_ok) {
+        float c = 0;
+        if (temperature_sensor_get_celsius(s_pc_tsens, &c) == ESP_OK && c > -20 && c < 120) {
+            s_pc_chip_temp = c;
+        }
+    }
+
+    bool live = (s_pc_host_stamp > 0) && (now - s_pc_host_stamp < 20000000LL);
+    if (s_pc_pclink) lv_label_set_text(s_pc_pclink, live ? "USB 已连接" : "等待电脑");
+
+    char v[PC_PC_ROWS][24];
+    memset(v, 0, sizeof(v));
+
+    if (s_pc_cpu >= 0) {
+        if (s_pc_freq > 0) snprintf(v[0], sizeof(v[0]), "%.0f%% %.1fGHz", s_pc_cpu, s_pc_freq);
+        else               snprintf(v[0], sizeof(v[0]), "%.0f%%", s_pc_cpu);
+    } else snprintf(v[0], sizeof(v[0]), "--");
+
+    if (s_pc_mempct >= 0) {
+        if (s_pc_memt > 0) snprintf(v[1], sizeof(v[1]), "%.0f%% %.1f/%.0fG",
+                                    s_pc_mempct, s_pc_memu, s_pc_memt);
+        else               snprintf(v[1], sizeof(v[1]), "%.0f%%", s_pc_mempct);
+    } else snprintf(v[1], sizeof(v[1]), "--");
+
+    if (s_pc_disk >= 0) snprintf(v[2], sizeof(v[2]), "%.0f%%", s_pc_disk);
+    else                snprintf(v[2], sizeof(v[2]), "--");
+
+    {
+        char a[10], b[10];
+        pc_fmt_net(a, sizeof(a), s_pc_dn);
+        pc_fmt_net(b, sizeof(b), s_pc_up);
+        snprintf(v[3], sizeof(v[3]), "%s / %s", a, b);
+    }
+
+    if (s_pc_ctemp > 0) snprintf(v[4], sizeof(v[4]), "%.0f 度", s_pc_ctemp);
+    else                snprintf(v[4], sizeof(v[4]), "未装");
+
+    if (s_pc_chip_temp > -100) snprintf(v[5], sizeof(v[5]), "%.0f 度", s_pc_chip_temp);
+    else                       snprintf(v[5], sizeof(v[5]), "--");
+
+    for (int i = 0; i < PC_PC_ROWS; i++) {
+        if (s_pc_pcval[i]) lv_label_set_text(s_pc_pcval[i], v[i]);
+    }
+}
+
 static void pc_timer_cb(lv_timer_t* /*t*/) {
     if (s_pc_root == nullptr) return;
 
@@ -316,6 +509,8 @@ static void pc_timer_cb(lv_timer_t* /*t*/) {
         }
     } else if (s_pc_page_idx == 2) {
         pc_refresh_info();
+    } else if (s_pc_page_idx == 4) {
+        pc_refresh_pc_page();
     }
 }
 
@@ -355,7 +550,7 @@ static void pc_build_ui(lv_obj_t* screen) {
     lv_obj_remove_flag(s_pc_scrim, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_remove_flag(s_pc_scrim, LV_OBJ_FLAG_CLICKABLE);
 
-    for (int i = 0; i < 4; i++) {
+    for (int i = 0; i < 5; i++) {
         s_pc_page[i] = lv_obj_create(s_pc_root);
         lv_obj_set_size(s_pc_page[i], LV_HOR_RES, LV_VER_RES);
         lv_obj_set_pos(s_pc_page[i], 0, 0);
@@ -365,7 +560,8 @@ static void pc_build_ui(lv_obj_t* screen) {
         lv_obj_set_style_radius(s_pc_page[i], 0, 0);
         lv_obj_remove_flag(s_pc_page[i], LV_OBJ_FLAG_SCROLLABLE);
         lv_obj_add_flag(s_pc_page[i], LV_OBJ_FLAG_CLICKABLE);
-        if (i < 3) lv_obj_add_event_cb(s_pc_page[i], pc_page_click_cb, LV_EVENT_CLICKED, nullptr);
+        // 设置页有自己的返回按钮，不参与"点空白翻页"
+        if (i != 3) lv_obj_add_event_cb(s_pc_page[i], pc_page_click_cb, LV_EVENT_CLICKED, nullptr);
     }
 
     // ---- 页0：磁贴桌面 ----
@@ -374,31 +570,38 @@ static void pc_build_ui(lv_obj_t* screen) {
     lv_obj_set_style_text_color(brand, lv_color_hex(0xFFFFFF), 0);
     lv_obj_set_pos(brand, 12, 4);
 
-    for (int i = 0; i < 4; i++) {
-        int col = i % 2, row = i / 2;
+    for (int i = 0; i < 5; i++) {
+        int x, y, w, h;
+        if (i < 4) {                       // 2×2 网格
+            x = 6 + (i % 2) * 158;
+            y = 28 + (i / 2) * 64;
+            w = 150; h = 60;
+        } else {                           // 第 5 个「设置」横跨整行
+            x = 6; y = 156; w = 308; h = 60;
+        }
         s_pc_tile[i] = lv_obj_create(s_pc_page[0]);
-        lv_obj_set_size(s_pc_tile[i], 144, 84);
-        lv_obj_set_pos(s_pc_tile[i], 8 + col * 152, 30 + row * 92);
-        lv_obj_set_style_radius(s_pc_tile[i], 14, 0);
+        lv_obj_set_size(s_pc_tile[i], w, h);
+        lv_obj_set_pos(s_pc_tile[i], x, y);
+        lv_obj_set_style_radius(s_pc_tile[i], 13, 0);
         lv_obj_set_style_border_width(s_pc_tile[i], 2, 0);
         lv_obj_set_style_border_color(s_pc_tile[i], lv_color_hex(PC_ACCENT[i]), 0);
-        lv_obj_set_style_pad_all(s_pc_tile[i], 4, 0);
-        lv_obj_set_style_pad_row(s_pc_tile[i], 2, 0);
+        lv_obj_set_style_pad_all(s_pc_tile[i], 0, 0);
         lv_obj_remove_flag(s_pc_tile[i], LV_OBJ_FLAG_SCROLLABLE);
         lv_obj_add_flag(s_pc_tile[i], LV_OBJ_FLAG_CLICKABLE);
-        lv_obj_set_flex_flow(s_pc_tile[i], LV_FLEX_FLOW_COLUMN);
-        lv_obj_set_flex_align(s_pc_tile[i], LV_FLEX_ALIGN_CENTER,
-                             LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
 
         lv_obj_t* ic = lv_image_create(s_pc_tile[i]);
         lv_image_set_src(ic, &s_pc_icon_dsc[PC_TILE_ICON[i]]);
+        // 图标资源本身就是 34x34（make_assets.py 里缩好的），这里不做缩放：
+        // lv_image_set_scale 依赖软件变换，跨 LVGL 版本行为不一致，能不用就不用。
+        lv_obj_align(ic, LV_ALIGN_TOP_MID, 0, 4);
         lv_obj_remove_flag(ic, LV_OBJ_FLAG_CLICKABLE);
 
         s_pc_tile_txt[i] = lv_label_create(s_pc_tile[i]);
         lv_label_set_text(s_pc_tile_txt[i], PC_TILE_NAME[i]);
+        lv_obj_align(s_pc_tile_txt[i], LV_ALIGN_TOP_MID, 0, 39);
 
-        int code = (i == 0) ? 4 : i;
-        lv_obj_add_event_cb(s_pc_tile[i], pc_action_cb, LV_EVENT_CLICKED, (void*)(intptr_t)code);
+        lv_obj_add_event_cb(s_pc_tile[i], pc_action_cb, LV_EVENT_CLICKED,
+                            (void*)(intptr_t)PC_TILE_CODE[i]);
     }
 
     // ---- 页1：大号时钟 ----
@@ -463,21 +666,46 @@ static void pc_build_ui(lv_obj_t* screen) {
         }
     }
 
-    // ---- 页面小圆点 ----
-    for (int i = 0; i < 3; i++) {
-        s_pc_dot[i] = lv_obj_create(s_pc_page[0]);
-        lv_obj_set_size(s_pc_dot[i], i == 0 ? 12 : 6, 6);
-        lv_obj_set_pos(s_pc_dot[i], LV_HOR_RES / 2 - 18 + i * 14, 226);
-        lv_obj_set_style_radius(s_pc_dot[i], LV_RADIUS_CIRCLE, 0);
-        lv_obj_set_style_border_width(s_pc_dot[i], 0, 0);
-        lv_obj_set_style_bg_opa(s_pc_dot[i], i == 0 ? LV_OPA_COVER : LV_OPA_40, 0);
-        lv_obj_remove_flag(s_pc_dot[i], LV_OBJ_FLAG_SCROLLABLE);
-        lv_obj_remove_flag(s_pc_dot[i], LV_OBJ_FLAG_CLICKABLE);
+    // ---- 页4：电脑运行信息（数据由电脑端经串口下发） ----
+    {
+        s_pc_pctitle = lv_label_create(s_pc_page[4]);
+        lv_label_set_text(s_pc_pctitle, "<  电脑");
+        lv_obj_set_pos(s_pc_pctitle, 12, 8);
+        lv_obj_add_flag(s_pc_pctitle, LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_add_event_cb(s_pc_pctitle, pc_action_cb, LV_EVENT_CLICKED, (void*)(intptr_t)12);
+
+        s_pc_pclink = lv_label_create(s_pc_page[4]);
+        lv_label_set_text(s_pc_pclink, "等待电脑");
+        lv_obj_align(s_pc_pclink, LV_ALIGN_TOP_RIGHT, -12, 10);
+
+        const char* names[PC_PC_ROWS] = {
+            "CPU", "内存", "磁盘", "网络 下/上", "CPU 温度", "芯片温度"
+        };
+        for (int i = 0; i < PC_PC_ROWS; i++) {
+            s_pc_pcrow[i] = lv_obj_create(s_pc_page[4]);
+            lv_obj_set_size(s_pc_pcrow[i], LV_HOR_RES - 20, 30);
+            lv_obj_set_pos(s_pc_pcrow[i], 10, 36 + i * 32);
+            lv_obj_set_style_radius(s_pc_pcrow[i], 8, 0);
+            lv_obj_set_style_border_width(s_pc_pcrow[i], 1, 0);
+            lv_obj_set_style_pad_all(s_pc_pcrow[i], 0, 0);
+            lv_obj_remove_flag(s_pc_pcrow[i], LV_OBJ_FLAG_SCROLLABLE);
+            lv_obj_remove_flag(s_pc_pcrow[i], LV_OBJ_FLAG_CLICKABLE);
+
+            s_pc_pcname[i] = lv_label_create(s_pc_pcrow[i]);
+            lv_label_set_text(s_pc_pcname[i], names[i]);
+            lv_obj_align(s_pc_pcname[i], LV_ALIGN_LEFT_MID, 10, 0);
+
+            s_pc_pcval[i] = lv_label_create(s_pc_pcrow[i]);
+            lv_label_set_text(s_pc_pcval[i], "--");
+            lv_obj_align(s_pc_pcval[i], LV_ALIGN_RIGHT_MID, -10, 0);
+        }
     }
 
     pc_apply_palette();
     pc_refresh_settings();
     pc_show_page(s_pc_boot == 1 ? 1 : 0);
+    pc_host_rx_start();
+    pc_chip_temp_start();
     lv_timer_create(pc_timer_cb, 500, nullptr);
 }
 // === __MARK__ END ===
