@@ -1147,10 +1147,12 @@ static void pc_build_ui(lv_obj_t* screen) {
     lv_obj_set_pos(brand, 12, 4);
 
     for (int i = 0; i < 6; i++) {
-        // 2×3 网格：6 个磁贴等大（设置和闹钟并排最后一行）
-        int x = 6 + (i % 2) * 158;
-        int y = 28 + (i / 2) * 64;
-        int w = 150, h = 60;
+        // 横屏 3×2 网格：一排三个、共两排
+        // 屏 320 宽：6 + 100 + 4 + 100 + 4 + 100 + 6 = 320
+        // 屏 240 高：28(顶栏) + 98 + 10 + 98 + 6 = 240
+        int x = 6 + (i % 3) * 104;
+        int y = 28 + (i / 3) * 108;
+        int w = 100, h = 98;
         s_pc_tile[i] = lv_obj_create(s_pc_page[0]);
         lv_obj_set_size(s_pc_tile[i], w, h);
         lv_obj_set_pos(s_pc_tile[i], x, y);
@@ -1165,12 +1167,12 @@ static void pc_build_ui(lv_obj_t* screen) {
         lv_image_set_src(ic, &s_pc_icon_dsc[PC_TILE_ICON[i]]);
         // 图标资源本身就是 34x34（make_assets.py 里缩好的），这里不做缩放：
         // lv_image_set_scale 依赖软件变换，跨 LVGL 版本行为不一致，能不用就不用。
-        lv_obj_align(ic, LV_ALIGN_TOP_MID, 0, 4);
+        lv_obj_align(ic, LV_ALIGN_TOP_MID, 0, 20);
         lv_obj_remove_flag(ic, LV_OBJ_FLAG_CLICKABLE);
 
         s_pc_tile_txt[i] = lv_label_create(s_pc_tile[i]);
         lv_label_set_text(s_pc_tile_txt[i], PC_TILE_NAME[i]);
-        lv_obj_align(s_pc_tile_txt[i], LV_ALIGN_TOP_MID, 0, 39);
+        lv_obj_align(s_pc_tile_txt[i], LV_ALIGN_TOP_MID, 0, 60);
 
         lv_obj_add_event_cb(s_pc_tile[i], pc_action_cb, LV_EVENT_CLICKED,
                             (void*)(intptr_t)PC_TILE_CODE[i]);
