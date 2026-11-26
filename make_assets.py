@@ -222,16 +222,20 @@ def icon_pc():
 
 
 def icon_alarm():
-    """闹钟：圆钟面 + 两耳 + 指针 + 两只脚"""
+    """闹钟：圆钟面 + 顶上两个铃铛 + 指针 + 两只脚"""
     img = _canvas(); d = ImageDraw.Draw(img)
     c = (255, 107, 107, 255)
-    d.ellipse([_S(11), _S(13), _S(37), _S(39)], outline=c, width=_S(3))
-    d.line([_S(11), _S(15), _S(6), _S(9)], fill=c, width=_S(3))
-    d.line([_S(37), _S(15), _S(42), _S(9)], fill=c, width=_S(3))
-    d.line([_S(24), _S(26), _S(24), _S(18)], fill=c, width=_S(2.8))
-    d.line([_S(24), _S(26), _S(31), _S(30)], fill=c, width=_S(2.8))
-    d.line([_S(16), _S(38), _S(12), _S(43)], fill=c, width=_S(2.6))
-    d.line([_S(32), _S(38), _S(36), _S(43)], fill=c, width=_S(2.6))
+    # 钟面（稍微下移，给顶部铃铛让位）
+    d.ellipse([_S(9), _S(15), _S(39), _S(45)], outline=c, width=_S(3))
+    # 顶部两个实心铃铛，压在钟面左上/右上
+    d.ellipse([_S(3), _S(5), _S(17), _S(19)], fill=c)
+    d.ellipse([_S(31), _S(5), _S(45), _S(19)], fill=c)
+    # 指针：时针朝上、分针朝右下
+    d.line([_S(24), _S(30), _S(24), _S(21)], fill=c, width=_S(3))
+    d.line([_S(24), _S(30), _S(31), _S(34)], fill=c, width=_S(3))
+    # 两只脚
+    d.line([_S(14), _S(43), _S(9), _S(47)], fill=c, width=_S(3))
+    d.line([_S(34), _S(43), _S(39), _S(47)], fill=c, width=_S(3))
     return img
 
 
@@ -322,23 +326,25 @@ def build_mock(wall, icons, glyphs):
     # 品牌字
     d.text((10, 4), "小智", font=load_font(15, cjk=True), fill=(255, 255, 255, 235))
 
-    # 5 个磁贴：2 列 × 3 行，最后一行「设置」横跨两列
+    # 6 个磁贴：横屏 3 列 × 2 行
+    # 横坐标 6 + 104*i（宽 100，列间 4 像素），纵坐标 28 + 108*r（高 98，行间 10 像素）
     tiles = [
-        ("小智AI", 0, (89, 167, 255), 6, 28, 150),
-        ("时钟",   1, (56, 214, 224), 164, 28, 150),
-        ("状态",   2, (74, 222, 128), 6, 92, 150),
-        ("电脑",   4, (199, 146, 234), 164, 92, 150),
-        ("设置",   3, (255, 176, 32), 6, 156, 308),
+        ("小智AI", 0, (89, 167, 255), 6, 28),
+        ("时钟",   1, (56, 214, 224), 110, 28),
+        ("状态",   2, (74, 222, 128), 214, 28),
+        ("电脑",   4, (199, 146, 234), 6, 136),
+        ("设置",   3, (255, 176, 32), 110, 136),
+        ("闹钟",   5, (255, 107, 107), 214, 136),
     ]
-    for label, ii, accent, x, y, tw in tiles:
-        th = 60
+    for label, ii, accent, x, y in tiles:
+        tw, th = 100, 98
         d.rounded_rectangle([x, y, x + tw, y + th], radius=13,
                             fill=(20, 26, 38, 235), outline=accent + (255,), width=2)
         ic = icons[ii].resize((34, 34), Image.LANCZOS)
-        m.alpha_composite(ic, (x + (tw - 34) // 2, y + 3))
+        m.alpha_composite(ic, (x + (tw - 34) // 2, y + 20))
         f = load_font(15, cjk=True)
         bb = d.textbbox((0, 0), label, font=f)
-        d.text((x + (tw - (bb[2] - bb[0])) / 2, y + 39), label, font=f,
+        d.text((x + (tw - (bb[2] - bb[0])) / 2, y + 60), label, font=f,
                fill=(236, 240, 248, 255))
 
     m.convert("RGB").save(MOCK)
