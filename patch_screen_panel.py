@@ -313,6 +313,8 @@ static lv_obj_t* s_pc_pclink = nullptr;   // 右上角「已连接 / 等待电�
 static lv_image_dsc_t s_pc_wall_dsc;
 static lv_image_dsc_t s_pc_icon_dsc[6];
 static lv_image_dsc_t s_pc_digit_dsc[PC_DIGIT_COUNT];
+// 闹钟页顶部用的小号数字（21x32），让上面那行时间少占点高度，好把下面的行留宽
+static lv_image_dsc_t s_pc_digit_sm_dsc[PC_DIGIT_COUNT];
 
 static int  s_pc_page_idx = 0;
 static bool s_pc_dark = PC_DEFAULT_DARK;
@@ -391,6 +393,11 @@ static void pc_init_assets() {
         uint32_t one = (uint32_t)(PC_DIGIT_W * PC_DIGIT_H * 3);
         pc_make_dsc(&s_pc_digit_dsc[i], pc_digits_map + one * (uint32_t)i, one,
                     PC_DIGIT_W, PC_DIGIT_H, PC_DIGIT_W * 2, LV_COLOR_FORMAT_RGB565A8);
+    }
+    for (int i = 0; i < PC_DIGIT_COUNT; i++) {
+        uint32_t one = (uint32_t)(PC_DIGIT_SM_W * PC_DIGIT_SM_H * 3);
+        pc_make_dsc(&s_pc_digit_sm_dsc[i], pc_digits_sm_map + one * (uint32_t)i, one,
+                    PC_DIGIT_SM_W, PC_DIGIT_SM_H, PC_DIGIT_SM_W * 2, LV_COLOR_FORMAT_RGB565A8);
     }
 }
 
@@ -999,7 +1006,7 @@ static void pc_alm_refresh() {
             if (s_pc_alm_big[i] == nullptr) continue;
             if (s_pc_alm_digit[i] == idx[i]) continue;
             s_pc_alm_digit[i] = idx[i];
-            lv_image_set_src(s_pc_alm_big[i], &s_pc_digit_dsc[idx[i]]);
+            lv_image_set_src(s_pc_alm_big[i], &s_pc_digit_sm_dsc[idx[i]]);
         }
     }
 
@@ -1277,22 +1284,24 @@ static void pc_build_ui(lv_obj_t* screen) {
 
     // ---- 页5：闹钟 / 定时提醒 ----
     {
-        int total = 5 * PC_DIGIT_W + 4 * 2;
+        // 顶部时间用小号数字（21x32），比大钟页矮 14 像素，
+        // 省下来的高度全部给下面三行闹钟。
+        int total = 5 * PC_DIGIT_SM_W + 4 * 2;
         int x0 = (LV_HOR_RES - total) / 2;
         for (int i = 0; i < 5; i++) {
             s_pc_alm_big[i] = lv_image_create(s_pc_page[5]);
-            lv_image_set_src(s_pc_alm_big[i], &s_pc_digit_dsc[i == 2 ? 10 : 0]);
-            lv_obj_set_pos(s_pc_alm_big[i], x0 + i * (PC_DIGIT_W + 2), 2);
+            lv_image_set_src(s_pc_alm_big[i], &s_pc_digit_sm_dsc[i == 2 ? 10 : 0]);
+            lv_obj_set_pos(s_pc_alm_big[i], x0 + i * (PC_DIGIT_SM_W + 2), 2);
             lv_obj_remove_flag(s_pc_alm_big[i], LV_OBJ_FLAG_CLICKABLE);
         }
         s_pc_alm_date = lv_label_create(s_pc_page[5]);
         lv_label_set_text(s_pc_alm_date, "正在对时…");
-        lv_obj_align(s_pc_alm_date, LV_ALIGN_TOP_MID, 0, 50);
+        lv_obj_align(s_pc_alm_date, LV_ALIGN_TOP_MID, 0, 36);
 
         for (int i = 0; i < PC_ALM_N; i++) {
             s_pc_alm_row[i] = lv_obj_create(s_pc_page[5]);
-            lv_obj_set_size(s_pc_alm_row[i], 300, 32);
-            lv_obj_set_pos(s_pc_alm_row[i], 10, 72 + i * 34);
+            lv_obj_set_size(s_pc_alm_row[i], 300, 40);
+            lv_obj_set_pos(s_pc_alm_row[i], 10, 58 + i * 44);
             lv_obj_set_style_radius(s_pc_alm_row[i], 9, 0);
             lv_obj_set_style_border_width(s_pc_alm_row[i], 1, 0);
             lv_obj_set_style_pad_all(s_pc_alm_row[i], 0, 0);
@@ -1324,8 +1333,8 @@ static void pc_build_ui(lv_obj_t* screen) {
             int cm[3] = {25, 10, 5};
             for (int i = 0; i < 3; i++) {
                 lv_obj_t* b = lv_obj_create(s_pc_page[5]);
-                lv_obj_set_size(b, 96, 32);
-                lv_obj_set_pos(b, 10 + i * 100, 178);
+                lv_obj_set_size(b, 96, 30);
+                lv_obj_set_pos(b, 10 + i * 100, 190);
                 lv_obj_set_style_radius(b, 9, 0);
                 lv_obj_set_style_border_width(b, 1, 0);
                 lv_obj_set_style_border_color(b, lv_color_hex(0xFF6B6B), 0);
@@ -1342,7 +1351,7 @@ static void pc_build_ui(lv_obj_t* screen) {
 
         s_pc_alm_hint = lv_label_create(s_pc_page[5]);
         lv_label_set_text(s_pc_alm_hint, "点时间 +10 分 · 长按 +60 分");
-        lv_obj_align(s_pc_alm_hint, LV_ALIGN_BOTTOM_MID, 0, -6);
+        lv_obj_align(s_pc_alm_hint, LV_ALIGN_BOTTOM_MID, 0, -4);
 
         // 响铃遮罩：轻触关闭，长按贪睡
         s_pc_alm_ov = lv_obj_create(s_pc_page[5]);
