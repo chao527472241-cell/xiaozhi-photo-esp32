@@ -221,6 +221,20 @@ def icon_pc():
     return img
 
 
+def icon_alarm():
+    """闹钟：圆钟面 + 两耳 + 指针 + 两只脚"""
+    img = _canvas(); d = ImageDraw.Draw(img)
+    c = (255, 107, 107, 255)
+    d.ellipse([_S(11), _S(13), _S(37), _S(39)], outline=c, width=_S(3))
+    d.line([_S(11), _S(15), _S(6), _S(9)], fill=c, width=_S(3))
+    d.line([_S(37), _S(15), _S(42), _S(9)], fill=c, width=_S(3))
+    d.line([_S(24), _S(26), _S(24), _S(18)], fill=c, width=_S(2.8))
+    d.line([_S(24), _S(26), _S(31), _S(30)], fill=c, width=_S(2.8))
+    d.line([_S(16), _S(38), _S(12), _S(43)], fill=c, width=_S(2.6))
+    d.line([_S(32), _S(38), _S(36), _S(43)], fill=c, width=_S(2.6))
+    return img
+
+
 # ---------------------------------------------------------------- 数字
 
 FONT_CANDIDATES = [
@@ -397,7 +411,8 @@ def main():
     # 超采样画完再缩回目标尺寸（边缘才干净）。
     # 图标按 48 画、输出 34：磁贴只有 60 高，放不下 48 的图。
     icons = [i.resize((ICON_OUT, ICON_OUT), Image.LANCZOS)
-             for i in (icon_mic(), icon_clock(), icon_bars(), icon_gear(), icon_pc())]
+             for i in (icon_mic(), icon_clock(), icon_bars(), icon_gear(),
+                       icon_pc(), icon_alarm())]
     glyphs = [g.resize((DIGIT_W, DIGIT_H), Image.LANCZOS)
               for g in ([_glyph(c) for c in "0123456789"] + [_glyph(":")])]
 
