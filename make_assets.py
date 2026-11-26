@@ -29,7 +29,8 @@ MOCK = os.path.join(HERE, "_mock_home.png")
 W, H = 320, 240          # 屏幕分辨率
 ICON_W = ICON_H = 48     # 图标绘制坐标系（先按 48 画，超采样，边缘才干净）
 ICON_OUT = 34            # 实际输出尺寸：磁贴只有 60 高，图标必须缩小
-DIGIT_W, DIGIT_H = 30, 46  # 单个字符格子
+DIGIT_W, DIGIT_H = 30, 46  # 单个字符格子（大钟用）
+DIGIT_SM_W, DIGIT_SM_H = 21, 32   # 小号字符格子（闹钟页顶部用，约 70%）
 SS = 4                   # 画图标/文字时的超采样倍数（先画大再缩小，边缘才干净）
 
 # ---------------------------------------------------------------- 壁纸
@@ -421,6 +422,9 @@ def main():
                        icon_pc(), icon_alarm())]
     glyphs = [g.resize((DIGIT_W, DIGIT_H), Image.LANCZOS)
               for g in ([_glyph(c) for c in "0123456789"] + [_glyph(":")])]
+    # 小号数字：闹钟页顶部的时间要占少一点空间，直接由大号缩下去，
+    # 字形比例和大钟一致，不用再单独挑字号。
+    glyphs_sm = [g.resize((DIGIT_SM_W, DIGIT_SM_H), Image.LANCZOS) for g in glyphs]
 
     lines = []
     lines.append("// 由 make_assets.py 自动生成，不要手改")
@@ -434,6 +438,8 @@ def main():
     lines.append("#define PC_ICON_H %d" % ICON_OUT)
     lines.append("#define PC_DIGIT_W %d" % DIGIT_W)
     lines.append("#define PC_DIGIT_H %d" % DIGIT_H)
+    lines.append("#define PC_DIGIT_SM_W %d" % DIGIT_SM_W)
+    lines.append("#define PC_DIGIT_SM_H %d" % DIGIT_SM_H)
     lines.append("#define PC_DIGIT_COUNT %d" % len(glyphs))
     lines.append("")
 
@@ -449,6 +455,9 @@ def main():
 
     glyph_bytes = b"".join(_rgb565a8_bytes(g) for g in glyphs)
     _emit_array(buf, "pc_digits_map", glyph_bytes)
+
+    glyph_sm_bytes = b"".join(_rgb565a8_bytes(g) for g in glyphs_sm)
+    _emit_array(buf, "pc_digits_sm_map", glyph_sm_bytes)
 
     with open(OUT_H, "w", encoding="utf-8") as f:
         f.write("\n".join(lines))
