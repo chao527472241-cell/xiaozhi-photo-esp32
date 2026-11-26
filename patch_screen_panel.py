@@ -271,6 +271,7 @@ TEMPLATE = r'''
 #include "freertos/task.h"
 #include "board.h"
 #include "audio_codec.h"
+#include "assets/lang_config.h"
 
 // --- 由电脑端 screen_config.txt 生成 ---
 static const char* PC_SLOGAN      = __SLOGAN__;
@@ -289,9 +290,9 @@ static const int   PC_DIM_SEC      = __DIM__;      // 多久没动静熄背光�
 static lv_obj_t* s_pc_root = nullptr;
 static lv_obj_t* s_pc_wall = nullptr;
 static lv_obj_t* s_pc_scrim = nullptr;
-static lv_obj_t* s_pc_page[5] = {nullptr, nullptr, nullptr, nullptr, nullptr};
-static lv_obj_t* s_pc_tile[5] = {nullptr, nullptr, nullptr, nullptr, nullptr};
-static lv_obj_t* s_pc_tile_txt[5] = {nullptr, nullptr, nullptr, nullptr, nullptr};
+static lv_obj_t* s_pc_page[6] = {nullptr, nullptr, nullptr, nullptr, nullptr, nullptr};
+static lv_obj_t* s_pc_tile[6] = {nullptr, nullptr, nullptr, nullptr, nullptr, nullptr};
+static lv_obj_t* s_pc_tile_txt[6] = {nullptr, nullptr, nullptr, nullptr, nullptr, nullptr};
 static lv_obj_t* s_pc_row[3] = {nullptr, nullptr, nullptr};
 static lv_obj_t* s_pc_row_txt[3] = {nullptr, nullptr, nullptr};
 static lv_obj_t* s_pc_row_val[3] = {nullptr, nullptr, nullptr};
@@ -310,7 +311,7 @@ static lv_obj_t* s_pc_pcval[PC_PC_ROWS] = {nullptr};
 static lv_obj_t* s_pc_pclink = nullptr;   // 右上角「已连接 / 等待电脑」
 
 static lv_image_dsc_t s_pc_wall_dsc;
-static lv_image_dsc_t s_pc_icon_dsc[5];
+static lv_image_dsc_t s_pc_icon_dsc[6];
 static lv_image_dsc_t s_pc_digit_dsc[PC_DIGIT_COUNT];
 
 static int  s_pc_page_idx = 0;
@@ -358,11 +359,11 @@ static temperature_sensor_handle_t s_pc_tsens = nullptr;
 static bool s_pc_tsens_ok = false;
 static volatile float s_pc_chip_temp = -999;
 
-static const uint32_t PC_ACCENT[5] = {0x59A7FF, 0x38D6E0, 0x4ADE80, 0xC792EA, 0xFFB020};
-static const char* PC_TILE_NAME[5] = {"小智AI", "时钟", "状态", "电脑", "设置"};
-static const int PC_TILE_ICON[5] = {0, 1, 2, 4, 3};
-// 磁贴 → action code：4=收起面板，1/2/5=切页，3=设置页
-static const int PC_TILE_CODE[5] = {4, 1, 2, 5, 3};
+static const uint32_t PC_ACCENT[6] = {0x59A7FF, 0x38D6E0, 0x4ADE80, 0xC792EA, 0xFFB020, 0xFF6B6B};
+static const char* PC_TILE_NAME[6] = {"小智AI", "时钟", "状态", "电脑", "设置", "闹钟"};
+static const int PC_TILE_ICON[6] = {0, 1, 2, 4, 3, 5};
+// 磁贴 → action code：4=收起面板，1/2/5/6=切页，3=设置页
+static const int PC_TILE_CODE[6] = {4, 1, 2, 5, 3, 6};
 
 static void pc_make_dsc(lv_image_dsc_t* d, const uint8_t* data, uint32_t size,
                         int w, int h, int stride, lv_color_format_t cf) {
@@ -381,7 +382,7 @@ static void pc_init_assets() {
     s_pc_assets_ready = true;
     pc_make_dsc(&s_pc_wall_dsc, pc_wallpaper_map, (uint32_t)sizeof(pc_wallpaper_map),
                 PC_WALLPAPER_W, PC_WALLPAPER_H, PC_WALLPAPER_W * 2, LV_COLOR_FORMAT_RGB565);
-    for (int i = 0; i < 5; i++) {
+    for (int i = 0; i < 6; i++) {
         uint32_t one = (uint32_t)(PC_ICON_W * PC_ICON_H * 3);
         pc_make_dsc(&s_pc_icon_dsc[i], pc_icons_map + one * (uint32_t)i, one,
                     PC_ICON_W, PC_ICON_H, PC_ICON_W * 2, LV_COLOR_FORMAT_RGB565A8);
@@ -395,9 +396,9 @@ static void pc_init_assets() {
 
 static void pc_show_page(int p) {
     if (p < 0) p = 0;
-    if (p > 4) p = 4;
+    if (p > 5) p = 5;
     s_pc_page_idx = p;
-    for (int i = 0; i < 5; i++) {
+    for (int i = 0; i < 6; i++) {
         if (s_pc_page[i] == nullptr) continue;
         if (i == p) lv_obj_remove_flag(s_pc_page[i], LV_OBJ_FLAG_HIDDEN);
         else        lv_obj_add_flag(s_pc_page[i], LV_OBJ_FLAG_HIDDEN);
@@ -458,6 +459,7 @@ static void pc_action_cb(lv_event_t* e) {
         case 2: pc_show_page(2); break;
         case 3: pc_show_page(3); break;
         case 5: pc_show_page(4); break;
+        case 6: pc_show_page(5); break;
         case 4:
             s_pc_manual_hide = true;
             if (s_pc_root) lv_obj_add_flag(s_pc_root, LV_OBJ_FLAG_HIDDEN);
@@ -484,7 +486,8 @@ static void pc_page_click_cb(lv_event_t* e) {
     int p = s_pc_page_idx;
     if (p == 0)      pc_show_page(1);
     else if (p == 1) pc_show_page(2);
-    else if (p == 2) pc_show_page(4);
+    else if (p == 2) pc_show_page(5);
+    else if (p == 5) pc_show_page(4);
     else if (p == 4) pc_show_page(0);
 }
 
@@ -656,7 +659,8 @@ static void pc_next_page() {
     int p = s_pc_page_idx;
     if      (p == 0) pc_show_page(1);
     else if (p == 1) pc_show_page(2);
-    else if (p == 2) pc_show_page(4);
+    else if (p == 2) pc_show_page(5);
+    else if (p == 5) pc_show_page(4);
     else             pc_show_page(0);
 }
 
@@ -762,13 +766,293 @@ static void pc_refresh_pc_page() {
     }
 }
 
+// ---------------- 闹钟 / 定时提醒 ----------------
+#define PC_ALM_N 3
+
+typedef struct {
+    uint8_t on;
+    uint8_t hh;
+    uint8_t mm;
+    uint8_t rep;      // 0=只响一次  1=每天  2=工作日
+} pc_alm_t;
+
+static pc_alm_t  s_pc_alm[PC_ALM_N] = {{1, 7, 0, 2}, {0, 8, 30, 1}, {0, 12, 0, 1}};
+static lv_obj_t* s_pc_alm_row[PC_ALM_N] = {nullptr, nullptr, nullptr};
+static lv_obj_t* s_pc_alm_t[PC_ALM_N] = {nullptr, nullptr, nullptr};
+static lv_obj_t* s_pc_alm_r[PC_ALM_N] = {nullptr, nullptr, nullptr};
+static lv_obj_t* s_pc_alm_s[PC_ALM_N] = {nullptr, nullptr, nullptr};
+static lv_obj_t* s_pc_alm_big[5] = {nullptr, nullptr, nullptr, nullptr, nullptr};
+static lv_obj_t* s_pc_alm_date = nullptr;
+static lv_obj_t* s_pc_alm_hint = nullptr;
+static lv_obj_t* s_pc_alm_ov = nullptr;
+static lv_obj_t* s_pc_alm_ov_t = nullptr;
+
+static int  s_pc_alm_digit[5] = {-1, -1, -1, -1, -1};
+static int  s_pc_alm_cache[PC_ALM_N] = {-1, -1, -1};
+static int  s_pc_alm_ring = -1;                 // 正在响的槽位，-1=没响
+static int64_t s_pc_alm_ring_us = 0;            // 上一次补音的时刻
+static int  s_pc_alm_vol_bak = -1;              // 响铃前的音量
+static int  s_pc_alm_last_key = -1;             // 上次判过的「日期+时分」
+static bool s_pc_alm_snoozed = false;
+static int  s_pc_cd_end = 0;                    // 倒计时截止（epoch 秒），0=没开
+static int  s_pc_cd_total = 0;
+
+static void pc_alm_save() {
+    char buf[64];
+    int cap = (int)sizeof(buf);
+    int n = 0;
+    for (int i = 0; i < PC_ALM_N; i++) {
+        if (cap - n < 16) break;
+        n += snprintf(buf + n, (size_t)(cap - n), "%s%d,%d,%d,%d", i ? ";" : "",
+                      (int)s_pc_alm[i].on, (int)s_pc_alm[i].hh,
+                      (int)s_pc_alm[i].mm, (int)s_pc_alm[i].rep);
+    }
+    Settings st("screen_panel", true);
+    st.SetString("alarms", buf);
+}
+
+static void pc_alm_load() {
+    Settings st("screen_panel", false);
+    std::string s = st.GetString("alarms", "1,7,0,2;0,8,30,1;0,12,0,1");
+    const char* p = s.c_str();
+    for (int i = 0; i < PC_ALM_N && *p; i++) {
+        int on = 0, hh = 7, mm = 0, rep = 1;
+        if (sscanf(p, "%d,%d,%d,%d", &on, &hh, &mm, &rep) == 4) {
+            s_pc_alm[i].on  = on ? 1 : 0;
+            s_pc_alm[i].hh  = (uint8_t)((hh % 24 + 24) % 24);
+            s_pc_alm[i].mm  = (uint8_t)((mm % 60 + 60) % 60);
+            s_pc_alm[i].rep = (uint8_t)((rep % 3 + 3) % 3);
+        }
+        const char* q = strchr(p, ';');
+        if (q == nullptr) break;
+        p = q + 1;
+    }
+}
+
+static void pc_alm_fire(int idx) {
+    s_pc_alm_ring = idx;
+    s_pc_alm_ring_us = esp_timer_get_time();
+    s_pc_alm_snoozed = false;
+    s_pc_manual_hide = false;
+    pc_wake();                       // 熄着屏也要亮起来
+    AudioCodec* ac = Board::GetInstance().GetAudioCodec();
+    if (ac != nullptr) {
+        if (s_pc_alm_vol_bak < 0) s_pc_alm_vol_bak = ac->output_volume();
+        ac->SetOutputVolume(100);
+    }
+    pc_show_page(5);
+    if (s_pc_alm_ov != nullptr) {
+        lv_obj_remove_flag(s_pc_alm_ov, LV_OBJ_FLAG_HIDDEN);
+    }
+    if (s_pc_alm_ov_t != nullptr) {
+        char t[16];
+        if (idx >= 0 && idx < PC_ALM_N) {
+            snprintf(t, sizeof(t), "%02d:%02d", s_pc_alm[idx].hh, s_pc_alm[idx].mm);
+        } else {
+            snprintf(t, sizeof(t), "倒计时结束");
+        }
+        lv_label_set_text(s_pc_alm_ov_t, t);
+    }
+    Application::GetInstance().PlaySound(Lang::Sounds::OGG_SUCCESS);
+    ESP_LOGI("ScreenPanel", "alarm fire idx=%d", idx);
+}
+
+static void pc_alm_stop(bool snooze) {
+    if (s_pc_alm_ov != nullptr) lv_obj_add_flag(s_pc_alm_ov, LV_OBJ_FLAG_HIDDEN);
+    AudioCodec* ac = Board::GetInstance().GetAudioCodec();
+    if (ac != nullptr && s_pc_alm_vol_bak > 0) ac->SetOutputVolume(s_pc_alm_vol_bak);
+    s_pc_alm_vol_bak = -1;
+    s_pc_alm_ring = -1;
+    s_pc_alm_last_key = -1;
+    if (snooze) {
+        time_t now = time(nullptr);
+        s_pc_cd_total = 300;
+        s_pc_cd_end = (int)now + 300;
+    } else {
+        s_pc_cd_end = 0;
+        s_pc_cd_total = 0;
+    }
+    s_pc_act_us = esp_timer_get_time();
+}
+
+static void pc_cd_start(int minutes) {
+    time_t now = time(nullptr);
+    if (now < 1600000000) {          // 还没对时，终点会算错
+        if (s_pc_alm_hint) lv_label_set_text(s_pc_alm_hint, "还没对时，稍等再试");
+        return;
+    }
+    s_pc_cd_total = minutes * 60;
+    s_pc_cd_end = (int)now + minutes * 60;
+    s_pc_alm_last_key = -1;
+    if (s_pc_alm_hint) lv_label_set_text(s_pc_alm_hint, "倒计时中 · 点任意按钮取消");
+}
+
+static void pc_alm_tick() {
+    if (s_pc_alm_ring >= 0) {
+        s_pc_act_us = esp_timer_get_time();      // 响铃期间不许熄屏
+        int64_t dt = esp_timer_get_time() - s_pc_alm_ring_us;
+        if (dt > 180000000LL) {                  // 3 分钟没人管，自己停
+            pc_alm_stop(false);
+            return;
+        }
+        if (dt > 2000000LL) {                    // 每 2 秒补一次提示音
+            s_pc_alm_ring_us = esp_timer_get_time();
+            Application::GetInstance().PlaySound(Lang::Sounds::OGG_SUCCESS);
+        }
+        return;
+    }
+
+    time_t tnow = time(nullptr);
+    struct tm tm_now;
+    localtime_r(&tnow, &tm_now);
+    if (tm_now.tm_year < 120) return;            // 还没对时
+
+    if (s_pc_cd_end > 0 && (int)tnow >= s_pc_cd_end) {
+        s_pc_cd_end = 0;
+        s_pc_cd_total = 0;
+        pc_alm_fire(-2);
+        return;
+    }
+
+    int key = (tm_now.tm_yday << 11) | (tm_now.tm_hour << 6) | tm_now.tm_min;
+    if (key == s_pc_alm_last_key) return;        // 同一分钟只判一次
+    s_pc_alm_last_key = key;
+    for (int i = 0; i < PC_ALM_N; i++) {
+        if (!s_pc_alm[i].on) continue;
+        if (s_pc_alm[i].hh != tm_now.tm_hour || s_pc_alm[i].mm != tm_now.tm_min) continue;
+        int wd = tm_now.tm_wday;                 // 0=周日
+        if (s_pc_alm[i].rep == 2 && (wd == 0 || wd == 6)) continue;
+        if (s_pc_alm[i].rep == 0) {              // 只响一次，响完自动关
+            s_pc_alm[i].on = 0;
+            s_pc_alm_cache[i] = -1;
+            pc_alm_save();
+        }
+        pc_alm_fire(i);
+        break;
+    }
+}
+
+static void pc_alm_row_cb(lv_event_t* e) {
+    if (lv_event_get_code(e) != LV_EVENT_CLICKED) return;
+    if (s_pc_dimmed) { pc_wake(); return; }
+    int i = (int)(intptr_t)lv_event_get_user_data(e);
+    if (i < 0 || i >= PC_ALM_N) return;
+    s_pc_alm[i].on = s_pc_alm[i].on ? 0 : 1;
+    s_pc_alm_cache[i] = -1;
+    s_pc_alm_last_key = -1;
+    pc_alm_save();
+    s_pc_act_us = esp_timer_get_time();
+}
+
+static void pc_alm_time_cb(lv_event_t* e) {
+    lv_event_code_t c = lv_event_get_code(e);
+    if (c != LV_EVENT_CLICKED && c != LV_EVENT_LONG_PRESSED) return;
+    if (s_pc_dimmed) { pc_wake(); return; }
+    int i = (int)(intptr_t)lv_event_get_user_data(e);
+    if (i < 0 || i >= PC_ALM_N) return;
+    int step = (c == LV_EVENT_LONG_PRESSED) ? 60 : 10;
+    int tot = (int)s_pc_alm[i].hh * 60 + (int)s_pc_alm[i].mm + step;
+    tot %= 1440;
+    s_pc_alm[i].hh = (uint8_t)(tot / 60);
+    s_pc_alm[i].mm = (uint8_t)(tot % 60);
+    s_pc_alm[i].on = 1;                          // 调时间顺手打开
+    s_pc_alm_cache[i] = -1;
+    s_pc_alm_last_key = -1;
+    pc_alm_save();
+    s_pc_act_us = esp_timer_get_time();
+}
+
+static void pc_cd_btn_cb(lv_event_t* e) {
+    if (lv_event_get_code(e) != LV_EVENT_CLICKED) return;
+    if (s_pc_dimmed) { pc_wake(); return; }
+    int m = (int)(intptr_t)lv_event_get_user_data(e);
+    if (s_pc_cd_end > 0) {
+        s_pc_cd_end = 0;
+        s_pc_cd_total = 0;
+        if (s_pc_alm_hint) lv_label_set_text(s_pc_alm_hint, "已取消");
+    } else {
+        pc_cd_start(m);
+    }
+    s_pc_act_us = esp_timer_get_time();
+}
+
+static void pc_alm_ov_cb(lv_event_t* e) {
+    lv_event_code_t c = lv_event_get_code(e);
+    if (c == LV_EVENT_LONG_PRESSED) {
+        s_pc_alm_snoozed = true;
+        pc_alm_stop(true);
+    } else if (c == LV_EVENT_CLICKED && !s_pc_alm_snoozed) {
+        pc_alm_stop(false);
+    }
+}
+
+static void pc_alm_refresh() {
+    time_t tnow = time(nullptr);
+    struct tm tm_now;
+    localtime_r(&tnow, &tm_now);
+    bool ok = tm_now.tm_year >= 120;
+
+    if (ok) {
+        int hh = tm_now.tm_hour, mm = tm_now.tm_min;
+        int idx[5] = { hh / 10, hh % 10, 10, mm / 10, mm % 10 };
+        for (int i = 0; i < 5; i++) {
+            if (s_pc_alm_big[i] == nullptr) continue;
+            if (s_pc_alm_digit[i] == idx[i]) continue;
+            s_pc_alm_digit[i] = idx[i];
+            lv_image_set_src(s_pc_alm_big[i], &s_pc_digit_dsc[idx[i]]);
+        }
+    }
+
+    if (s_pc_alm_date != nullptr) {
+        char d[56];
+        if (!ok) {
+            lv_label_set_text(s_pc_alm_date, "正在对时…");
+        } else if (s_pc_cd_end > 0) {
+            int left = s_pc_cd_end - (int)tnow;
+            if (left < 0) left = 0;
+            snprintf(d, sizeof(d), "%d月%d日 周%s · 剩 %d:%02d",
+                     tm_now.tm_mon + 1, tm_now.tm_mday, pc_week_name(tm_now.tm_wday),
+                     left / 60, left % 60);
+            lv_label_set_text(s_pc_alm_date, d);
+        } else {
+            snprintf(d, sizeof(d), "%d月%d日 周%s", tm_now.tm_mon + 1, tm_now.tm_mday,
+                     pc_week_name(tm_now.tm_wday));
+            lv_label_set_text(s_pc_alm_date, d);
+        }
+    }
+
+    for (int i = 0; i < PC_ALM_N; i++) {
+        int sig = (int)s_pc_alm[i].on | ((int)s_pc_alm[i].hh << 1)
+                | ((int)s_pc_alm[i].mm << 8) | ((int)s_pc_alm[i].rep << 16);
+        if (sig == s_pc_alm_cache[i]) continue;
+        s_pc_alm_cache[i] = sig;
+        if (s_pc_alm_t[i] != nullptr) {
+            char t[8];
+            snprintf(t, sizeof(t), "%02d:%02d", s_pc_alm[i].hh, s_pc_alm[i].mm);
+            lv_label_set_text(s_pc_alm_t[i], t);
+        }
+        if (s_pc_alm_r[i] != nullptr) {
+            const char* r = (s_pc_alm[i].rep == 0) ? "一次"
+                          : ((s_pc_alm[i].rep == 1) ? "每天" : "工作日");
+            lv_label_set_text(s_pc_alm_r[i], r);
+        }
+        if (s_pc_alm_s[i] != nullptr) {
+            lv_label_set_text(s_pc_alm_s[i], s_pc_alm[i].on ? "开" : "关");
+            lv_obj_set_style_text_color(s_pc_alm_s[i],
+                lv_color_hex(s_pc_alm[i].on ? 0x4ADE80 : 0x8892A6), 0);
+        }
+    }
+}
+
 static void pc_timer_cb(lv_timer_t* /*t*/) {
     pc_imu_poll();   // 手势常驻：面板隐藏/熄屏时也要能靠拿起、摇晃叫醒
     if (s_pc_root == nullptr) return;
 
+    pc_alm_tick();   // 闹钟/倒计时：和页面是否可见无关，必须每轮都跑
+
     bool idle = (Application::GetInstance().GetDeviceState() == kDeviceStateIdle);
     if (!idle) s_pc_manual_hide = false;
-    bool show = idle && !s_pc_manual_hide;
+    bool show = (s_pc_alm_ring >= 0) || (idle && !s_pc_manual_hide);
     if (show) lv_obj_remove_flag(s_pc_root, LV_OBJ_FLAG_HIDDEN);
     else {
         lv_obj_add_flag(s_pc_root, LV_OBJ_FLAG_HIDDEN);
@@ -799,6 +1083,8 @@ static void pc_timer_cb(lv_timer_t* /*t*/) {
         pc_refresh_info();
     } else if (s_pc_page_idx == 4) {
         pc_refresh_pc_page();
+    } else if (s_pc_page_idx == 5) {
+        pc_alm_refresh();
     }
 }
 
@@ -838,7 +1124,7 @@ static void pc_build_ui(lv_obj_t* screen) {
     lv_obj_remove_flag(s_pc_scrim, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_remove_flag(s_pc_scrim, LV_OBJ_FLAG_CLICKABLE);
 
-    for (int i = 0; i < 5; i++) {
+    for (int i = 0; i < 6; i++) {
         s_pc_page[i] = lv_obj_create(s_pc_root);
         lv_obj_set_size(s_pc_page[i], LV_HOR_RES, LV_VER_RES);
         lv_obj_set_pos(s_pc_page[i], 0, 0);
@@ -860,15 +1146,11 @@ static void pc_build_ui(lv_obj_t* screen) {
     lv_obj_set_style_text_color(brand, lv_color_hex(0xFFFFFF), 0);
     lv_obj_set_pos(brand, 12, 4);
 
-    for (int i = 0; i < 5; i++) {
-        int x, y, w, h;
-        if (i < 4) {                       // 2×2 网格
-            x = 6 + (i % 2) * 158;
-            y = 28 + (i / 2) * 64;
-            w = 150; h = 60;
-        } else {                           // 第 5 个「设置」横跨整行
-            x = 6; y = 156; w = 308; h = 60;
-        }
+    for (int i = 0; i < 6; i++) {
+        // 2×3 网格：6 个磁贴等大（设置和闹钟并排最后一行）
+        int x = 6 + (i % 2) * 158;
+        int y = 28 + (i / 2) * 64;
+        int w = 150, h = 60;
         s_pc_tile[i] = lv_obj_create(s_pc_page[0]);
         lv_obj_set_size(s_pc_tile[i], w, h);
         lv_obj_set_pos(s_pc_tile[i], x, y);
@@ -991,6 +1273,104 @@ static void pc_build_ui(lv_obj_t* screen) {
         }
     }
 
+    // ---- 页5：闹钟 / 定时提醒 ----
+    {
+        int total = 5 * PC_DIGIT_W + 4 * 2;
+        int x0 = (LV_HOR_RES - total) / 2;
+        for (int i = 0; i < 5; i++) {
+            s_pc_alm_big[i] = lv_image_create(s_pc_page[5]);
+            lv_image_set_src(s_pc_alm_big[i], &s_pc_digit_dsc[i == 2 ? 10 : 0]);
+            lv_obj_set_pos(s_pc_alm_big[i], x0 + i * (PC_DIGIT_W + 2), 2);
+            lv_obj_remove_flag(s_pc_alm_big[i], LV_OBJ_FLAG_CLICKABLE);
+        }
+        s_pc_alm_date = lv_label_create(s_pc_page[5]);
+        lv_label_set_text(s_pc_alm_date, "正在对时…");
+        lv_obj_align(s_pc_alm_date, LV_ALIGN_TOP_MID, 0, 50);
+
+        for (int i = 0; i < PC_ALM_N; i++) {
+            s_pc_alm_row[i] = lv_obj_create(s_pc_page[5]);
+            lv_obj_set_size(s_pc_alm_row[i], 300, 32);
+            lv_obj_set_pos(s_pc_alm_row[i], 10, 72 + i * 34);
+            lv_obj_set_style_radius(s_pc_alm_row[i], 9, 0);
+            lv_obj_set_style_border_width(s_pc_alm_row[i], 1, 0);
+            lv_obj_set_style_pad_all(s_pc_alm_row[i], 0, 0);
+            lv_obj_remove_flag(s_pc_alm_row[i], LV_OBJ_FLAG_SCROLLABLE);
+            lv_obj_add_flag(s_pc_alm_row[i], LV_OBJ_FLAG_CLICKABLE);
+            lv_obj_add_event_cb(s_pc_alm_row[i], pc_alm_row_cb, LV_EVENT_CLICKED,
+                                (void*)(intptr_t)i);
+
+            s_pc_alm_t[i] = lv_label_create(s_pc_alm_row[i]);
+            lv_label_set_text(s_pc_alm_t[i], "07:00");
+            lv_obj_align(s_pc_alm_t[i], LV_ALIGN_LEFT_MID, 12, 0);
+            lv_obj_add_flag(s_pc_alm_t[i], LV_OBJ_FLAG_CLICKABLE);
+            lv_obj_add_event_cb(s_pc_alm_t[i], pc_alm_time_cb, LV_EVENT_CLICKED,
+                                (void*)(intptr_t)i);
+            lv_obj_add_event_cb(s_pc_alm_t[i], pc_alm_time_cb, LV_EVENT_LONG_PRESSED,
+                                (void*)(intptr_t)i);
+
+            s_pc_alm_r[i] = lv_label_create(s_pc_alm_row[i]);
+            lv_label_set_text(s_pc_alm_r[i], "工作日");
+            lv_obj_align(s_pc_alm_r[i], LV_ALIGN_LEFT_MID, 80, 0);
+
+            s_pc_alm_s[i] = lv_label_create(s_pc_alm_row[i]);
+            lv_label_set_text(s_pc_alm_s[i], "关");
+            lv_obj_align(s_pc_alm_s[i], LV_ALIGN_RIGHT_MID, -14, 0);
+        }
+
+        {
+            const char* cn[3] = {"25 分", "10 分", "5 分"};
+            int cm[3] = {25, 10, 5};
+            for (int i = 0; i < 3; i++) {
+                lv_obj_t* b = lv_obj_create(s_pc_page[5]);
+                lv_obj_set_size(b, 96, 32);
+                lv_obj_set_pos(b, 10 + i * 100, 178);
+                lv_obj_set_style_radius(b, 9, 0);
+                lv_obj_set_style_border_width(b, 1, 0);
+                lv_obj_set_style_border_color(b, lv_color_hex(0xFF6B6B), 0);
+                lv_obj_set_style_pad_all(b, 0, 0);
+                lv_obj_remove_flag(b, LV_OBJ_FLAG_SCROLLABLE);
+                lv_obj_add_flag(b, LV_OBJ_FLAG_CLICKABLE);
+                lv_obj_add_event_cb(b, pc_cd_btn_cb, LV_EVENT_CLICKED,
+                                    (void*)(intptr_t)cm[i]);
+                lv_obj_t* lb = lv_label_create(b);
+                lv_label_set_text(lb, cn[i]);
+                lv_obj_align(lb, LV_ALIGN_CENTER, 0, 0);
+            }
+        }
+
+        s_pc_alm_hint = lv_label_create(s_pc_page[5]);
+        lv_label_set_text(s_pc_alm_hint, "点时间 +10 分 · 长按 +60 分");
+        lv_obj_align(s_pc_alm_hint, LV_ALIGN_BOTTOM_MID, 0, -6);
+
+        // 响铃遮罩：轻触关闭，长按贪睡
+        s_pc_alm_ov = lv_obj_create(s_pc_page[5]);
+        lv_obj_set_size(s_pc_alm_ov, LV_HOR_RES, LV_VER_RES);
+        lv_obj_set_pos(s_pc_alm_ov, 0, 0);
+        lv_obj_set_style_bg_color(s_pc_alm_ov, lv_color_hex(0x1A1114), 0);
+        lv_obj_set_style_bg_opa(s_pc_alm_ov, LV_OPA_COVER, 0);
+        lv_obj_set_style_border_width(s_pc_alm_ov, 0, 0);
+        lv_obj_set_style_radius(s_pc_alm_ov, 0, 0);
+        lv_obj_set_style_pad_all(s_pc_alm_ov, 0, 0);
+        lv_obj_remove_flag(s_pc_alm_ov, LV_OBJ_FLAG_SCROLLABLE);
+        lv_obj_add_flag(s_pc_alm_ov, LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_add_flag(s_pc_alm_ov, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_add_event_cb(s_pc_alm_ov, pc_alm_ov_cb, LV_EVENT_CLICKED, nullptr);
+        lv_obj_add_event_cb(s_pc_alm_ov, pc_alm_ov_cb, LV_EVENT_LONG_PRESSED, nullptr);
+
+        s_pc_alm_ov_t = lv_label_create(s_pc_alm_ov);
+        lv_label_set_text(s_pc_alm_ov_t, "07:00");
+        lv_obj_align(s_pc_alm_ov_t, LV_ALIGN_CENTER, 0, -22);
+
+        lv_obj_t* ovh = lv_label_create(s_pc_alm_ov);
+        lv_label_set_text(ovh, "时间到");
+        lv_obj_align(ovh, LV_ALIGN_CENTER, 0, 10);
+
+        lv_obj_t* ovtip = lv_label_create(s_pc_alm_ov);
+        lv_label_set_text(ovtip, "轻触关闭 · 长按贪睡 5 分钟");
+        lv_obj_align(ovtip, LV_ALIGN_CENTER, 0, 44);
+    }
+
+    pc_alm_load();
     pc_apply_palette();
     pc_refresh_settings();
     pc_show_page(s_pc_boot == 1 ? 1 : 0);
